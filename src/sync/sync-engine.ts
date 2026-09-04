@@ -3,6 +3,15 @@ import { ChunkManager, ChunkInfo } from '../chunk/chunk-manager';
 import { encrypt, decrypt, sha256, bytesToBase64, base64ToBytes } from '../crypto/aes';
 import { pqcDsa } from '../crypto/pqc-provider';
 
+/** onProgress callback for chunk-level progress. `direction` is 'up' (upload) or 'down' (download). */
+export type ProgressCallback = (
+  chunkIndex: number,
+  totalChunks: number,
+  chunkBytes: number,
+  totalBytes: number,
+  direction: 'up' | 'down'
+) => void;
+
 const SCHEMA_VERSION = 2;
 
 /**
@@ -412,7 +421,7 @@ export class SyncEngine {
     encPath: string,
     fileData: Uint8Array,
     meta: VaultMetadata,
-    onProgress?: (chunkIndex: number, totalChunks: number, chunkBytes: number, totalBytes: number) => void
+    onProgress?: ProgressCallback
   ): Promise<{ meta: VaultMetadata; uploaded: number; chunks: number; durationMs: number; bytes: number }> {
     const t0 = performance.now();
     const chunks = await this.chunkManager.split(fileData);
@@ -429,7 +438,7 @@ export class SyncEngine {
       await this.webdav.uploadBytes(chunkPath, encrypted);
       chunkHashes.push(info.hash);
       uploaded++;
-      if (onProgress) onProgress(i + 1, chunks.length, data.length, fileData.length);
+      if (onProgress) onProgress(i + 1, chunks.length, data.length, fileData.length, 'up');
     }
 
     const now = new Date().toISOString();
@@ -452,7 +461,7 @@ export class SyncEngine {
   async downloadFile(
     encPath: string,
     meta: VaultMetadata,
-    onProgress?: (chunkIndex: number, totalChunks: number, chunkBytes: number, totalBytes: number) => void
+    onProgress?: ProgressCallback
   ): Promise<{ data: Uint8Array; durationMs: number; chunks: number; bytes: number } | null> {
     const t0 = performance.now();
     const entry = meta.files[encPath];
@@ -480,7 +489,7 @@ export class SyncEngine {
 
       chunkDataList.push({ data: decrypted, offset });
       offset += decrypted.length;
-      if (onProgress) onProgress(i + 1, entry.chunks.length, decrypted.length, entry.size);
+      if (onProgress) onProgress(i + 1, entry.chunks.length, decrypted.length, entry.size, 'down');
     }
 
     const data = this.chunkManager.merge(chunkDataList);
@@ -539,7 +548,7 @@ export class SyncEngine {
     encPath: string,
     fileData: Uint8Array,
     meta: VaultMetadata,
-    onProgress?: (chunkIndex: number, totalChunks: number, chunkBytes: number, totalBytes: number) => void
+    onProgress?: ProgressCallback
   ): Promise<{ meta: VaultMetadata; chunks: number; durationMs: number; bytes: number }> {
     const t0 = performance.now();
     delete meta.deleted[encPath];
@@ -554,7 +563,7 @@ export class SyncEngine {
       const sig = await this.computeChunkSignature(info.hash, data);
       await this.webdav.uploadBytes(`chunks/${info.hash}.bin.enc`, encrypted);
       chunkHashes.push(info.hash);
-      if (onProgress) onProgress(i + 1, chunks.length, data.length, fileData.length);
+      if (onProgress) onProgress(i + 1, chunks.length, data.length, fileData.length, 'up');
     }
 
     const now = new Date().toISOString();
@@ -574,7 +583,7 @@ export class SyncEngine {
   async forceDownloadFile(
     encPath: string,
     meta: VaultMetadata,
-    onProgress?: (chunkIndex: number, totalChunks: number, chunkBytes: number, totalBytes: number) => void
+    onProgress?: ProgressCallback
   ): Promise<Uint8Array | null> {
     const result = await this.downloadFile(encPath, meta, onProgress);
     return result?.data ?? null;
@@ -586,7 +595,7 @@ export class SyncEngine {
     encPath: string,
     localData: Uint8Array,
     localMeta: VaultMetadata,
-    onProgress?: (chunkIndex: number, totalChunks: number, chunkBytes: number, totalBytes: number) => void
+    onProgress?: ProgressCallback
   ): Promise<{
     meta: VaultMetadata;
     action: 'uploaded' | 'downloaded' | 'conflict-resolved' | 'unchanged';

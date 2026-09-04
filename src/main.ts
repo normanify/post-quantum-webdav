@@ -222,7 +222,9 @@ export default class PqcWebdavPlugin extends Plugin {
   }
 
   private formatBytes(bytes: number): string {
-    if (bytes < 1024) return `${bytes}B`;
+    if (!isFinite(bytes) || bytes <= 0) return '0B';
+    if (bytes < 1) return '<1B';
+    if (bytes < 1024) return `${bytes.toFixed(1)}B`;
     if (bytes < 1048576) return `${(bytes / 1024).toFixed(1)}KB`;
     return `${(bytes / 1048576).toFixed(1)}MB`;
   }
@@ -298,13 +300,13 @@ export default class PqcWebdavPlugin extends Plugin {
           const encPath = await encryptFilename(this.masterSecret, state.vaultId, file.path);
           const localData = await this.getFileData(file);
 
-          const result = await this.syncEngine.syncFile(encPath, localData, meta, (chunkIdx, totalChunks) => {
+          const result = await this.syncEngine.syncFile(encPath, localData, meta, (chunkIdx, totalChunks, chunkBytes, totalBytes, direction) => {
             const chunkPct = totalBytesAll > 0 ? (bytesTransferred + (localData.length * chunkIdx / totalChunks)) / totalBytesAll : 0;
             const chunkBar = this.progressBar(chunkPct);
             const sp = bytesTransferred > 0 && (performance.now() - tStart) > 0
               ? this.formatBytes(bytesTransferred / ((performance.now() - tStart) / 1000)) + '/s'
               : '';
-            const action = result?.action === 'downloaded' ? '↓' : '↑';
+            const action = direction === 'down' ? '↓' : '↑';
             this.setStatus('syncing', `${fileNum} ${chunkBar} ${this.formatBytes(bytesTransferred)}/${this.formatBytes(totalBytesAll)} ${sp} | ${action} ${file.path} chunk ${chunkIdx}/${totalChunks}`);
             if (chunkIdx % 20 === 0 || chunkIdx === totalChunks) {
               const chunkBytes = localData.length / totalChunks;
