@@ -1,0 +1,38 @@
+name: Release attestation
+
+on:
+  release:
+    types: [created]
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  build-and-attest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Verify build matches configured release
+        run: node -e "const m=require('./manifest.json'); if (m.version!==process.env.GITHUB_REF_NAME) { throw new Error('manifest.version '+m.version+' != release tag '+process.env.GITHUB_REF_NAME); } console.log('manifest.version matches release tag:', m.version);"
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v1
+        with:
+          subject-path: |
+            main.js
+            styles.css
