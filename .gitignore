@@ -15,3 +15,6 @@ main.js.map
 .env
 .env.local
 .env.*.local
+
+# Editor local history
+.history/

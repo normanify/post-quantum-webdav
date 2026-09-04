@@ -1,7 +1,7 @@
 {
   "id": "post-quantum-webdav",
   "name": "PQC WebDAV Sync",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "minAppVersion": "0.15.0",
   "description": "Encrypt your vault with post-quantum cryptography (ML-DSA/ML-KEM) and sync to any WebDAV server (Nextcloud, etc.) with chunked transfer and multi-device conflict resolution.",
   "author": "normanify",
