@@ -21,7 +21,8 @@
     "typescript": "^5.6.0"
   },
   "dependencies": {
-    "webdav": "^5.3.0",
-    "uuid": "^10.0.0"
+    "@noble/post-quantum": "^0.7.1",
+    "uuid": "^10.0.0",
+    "webdav": "^5.3.0"
   }
 }
