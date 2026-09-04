@@ -421,12 +421,6 @@ export class SyncEngine {
 
     for (let i = 0; i < chunks.length; i++) {
       const { data, info } = chunks[i];
-      const existingEntry = meta.files[encPath];
-      if (existingEntry && existingEntry.chunks.includes(info.hash)) {
-        chunkHashes.push(info.hash);
-        if (onProgress) onProgress(i + 1, chunks.length, 0, fileData.length);
-        continue;
-      }
 
       const keyBytes = await this.deriveChunkKey(info.hash);
       const encrypted = await encrypt(keyBytes, data);
@@ -472,7 +466,17 @@ export class SyncEngine {
       const chunkPath = `chunks/${hash}.bin.enc`;
       const encrypted = await this.webdav.downloadBytes(chunkPath);
       const keyBytes = await this.deriveChunkKey(hash);
-      const decrypted = await decrypt(keyBytes, encrypted);
+      let decrypted: Uint8Array;
+      try {
+        decrypted = await decrypt(keyBytes, encrypted);
+      } catch (e) {
+        throw new Error(`Chunk auth failed (tampered/corrupt): ${chunkPath} — ${e instanceof Error ? e.message : String(e)}`);
+      }
+
+      const actualHash = await sha256(decrypted);
+      if (actualHash !== hash) {
+        throw new Error(`Chunk hash mismatch: ${chunkPath} expected ${hash.slice(0, 12)}... got ${actualHash.slice(0, 12)}...`);
+      }
 
       chunkDataList.push({ data: decrypted, offset });
       offset += decrypted.length;
@@ -480,6 +484,9 @@ export class SyncEngine {
     }
 
     const data = this.chunkManager.merge(chunkDataList);
+    if (data.length !== entry.size) {
+      throw new Error(`File size mismatch for ${encPath}: expected ${entry.size} bytes, got ${data.length} bytes`);
+    }
     return { data, durationMs: performance.now() - t0, chunks: entry.chunks.length, bytes: data.length };
   }
 
