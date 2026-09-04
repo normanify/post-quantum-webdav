@@ -531,19 +531,23 @@ export class SyncEngine {
   async forceUploadFile(
     encPath: string,
     fileData: Uint8Array,
-    meta: VaultMetadata
-  ): Promise<{ meta: VaultMetadata; chunks: number }> {
+    meta: VaultMetadata,
+    onProgress?: (chunkIndex: number, totalChunks: number, chunkBytes: number, totalBytes: number) => void
+  ): Promise<{ meta: VaultMetadata; chunks: number; durationMs: number; bytes: number }> {
+    const t0 = performance.now();
     delete meta.deleted[encPath];
 
     const chunks = await this.chunkManager.split(fileData);
     const chunkHashes: string[] = [];
 
-    for (const { data, info } of chunks) {
+    for (let i = 0; i < chunks.length; i++) {
+      const { data, info } = chunks[i];
       const keyBytes = await this.deriveChunkKey(info.hash);
       const encrypted = await encrypt(keyBytes, data);
       const sig = await this.computeChunkSignature(info.hash, data);
       await this.webdav.uploadBytes(`chunks/${info.hash}.bin.enc`, encrypted);
       chunkHashes.push(info.hash);
+      if (onProgress) onProgress(i + 1, chunks.length, data.length, fileData.length);
     }
 
     const now = new Date().toISOString();
@@ -556,7 +560,8 @@ export class SyncEngine {
       signature: '',
     };
     meta.vectorClock = incrementClock(meta.vectorClock, this.deviceId);
-    return { meta, chunks: chunkHashes.length };
+    const durationMs = performance.now() - t0;
+    return { meta, chunks: chunkHashes.length, durationMs, bytes: fileData.length };
   }
 
   async forceDownloadFile(encPath: string, meta: VaultMetadata): Promise<Uint8Array | null> {
@@ -602,7 +607,10 @@ export class SyncEngine {
     const localEntry = localMeta.files[encPath];
 
     if (!remoteEntry && !localEntry) {
-      return { meta: remoteMeta, action: 'unchanged' };
+      // First sync: file exists locally but neither metadata tracks it yet — upload it
+      const { meta: uploadedMeta, chunks, durationMs, bytes } = await this.uploadFile(encPath, localData, remoteMeta, onProgress);
+      await this.uploadMetadata(uploadedMeta);
+      return { meta: uploadedMeta, action: 'uploaded', chunks, durationMs, bytes };
     }
 
     if (!remoteEntry && localEntry) {
