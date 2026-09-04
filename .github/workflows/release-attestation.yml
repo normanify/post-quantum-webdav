@@ -3,6 +3,7 @@ name: Release attestation
 on:
   release:
     types: [created]
+  workflow_dispatch:
 
 permissions:
   id-token: write
