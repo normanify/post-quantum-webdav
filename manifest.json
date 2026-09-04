@@ -1,0 +1,10 @@
+{
+  "id": "obsidian-pqc-webdav",
+  "name": "PQC WebDAV Sync",
+  "version": "0.1.0",
+  "minAppVersion": "0.15.0",
+  "description": "Encrypt vault with post-quantum cryptography and sync to WebDAV",
+  "author": "",
+  "authorUrl": "",
+  "isDesktopOnly": false
+}

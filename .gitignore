@@ -1,0 +1,12 @@
+node_modules/
+dist/
+
+# Build artifacts
+main.js
+main.js.map
+
+# OpenCode runtime continuation state
+.omo/
+
+.DS_Store
+*.log
