@@ -198,8 +198,18 @@ export default class PqcWebdavPlugin extends Plugin {
   }
 
   private async getFileData(file: TFile): Promise<Uint8Array> {
-    const content = await this.app.vault.read(file);
-    return new TextEncoder().encode(content);
+    const adapter = (this.app.vault as any).adapter;
+    const buffer = await adapter.readBinary(file.path);
+    return new Uint8Array(buffer);
+  }
+
+  private shouldSkip(file: TFile): boolean {
+    return file.path.startsWith('.') || file.path.startsWith('.obsidian/');
+  }
+
+  private async writeFile(file: TFile, data: Uint8Array): Promise<void> {
+    const adapter = (this.app.vault as any).adapter;
+    await adapter.writeBinary(file.path, data.buffer);
   }
 
   private onFileChanged(file: TFile) {
@@ -231,22 +241,26 @@ export default class PqcWebdavPlugin extends Plugin {
     this.setStatus('syncing');
 
     try {
-      // Load local metadata state
       const state = await this.state.load();
       if (!state) {
         return;
       }
       let meta = state.metadata;
 
-      // Get all markdown files
-      const allFiles = this.app.vault.getMarkdownFiles();
+      const allFiles = this.app.vault.getFiles();
+      const filesToSync = allFiles.filter(f => !this.shouldSkip(f));
       let uploaded = 0;
       let downloaded = 0;
       let conflicts = 0;
+      let totalBytes = 0;
+      const tStart = performance.now();
 
-      // Sync each markdown file (skip .obsidian internals)
-      for (const file of allFiles) {
-        if (file.path.startsWith('.obsidian/')) continue;
+      console.log(`[PQC Sync] Starting sync: ${filesToSync.length} files`);
+
+      for (let i = 0; i < filesToSync.length; i++) {
+        const file = filesToSync[i];
+        const label = `[${i + 1}/${filesToSync.length}] ${file.path}`;
+        this.setStatus('syncing', label);
 
         try {
           const encPath = await encryptFilename(this.masterSecret, state.vaultId, file.path);
@@ -255,40 +269,41 @@ export default class PqcWebdavPlugin extends Plugin {
           const result = await this.syncEngine.syncFile(encPath, localData, meta);
           meta = result.meta;
 
+          const sizeKB = (result.bytes || localData.length / 1024).toFixed(1);
+          const speed = result.durationMs ? ((result.bytes || 0) / 1024 / (result.durationMs / 1000)).toFixed(0) : '?';
+
           switch (result.action) {
             case 'uploaded':
               uploaded++;
+              totalBytes += result.bytes || 0;
+              console.log(`  ↑ ${label}  ${sizeKB}KB  ${result.chunks} chunks  ${result.durationMs?.toFixed(0)}ms  ${speed}KB/s`);
               break;
             case 'downloaded':
               downloaded++;
+              totalBytes += result.bytes || 0;
+              console.log(`  ↓ ${label}  ${sizeKB}KB  ${result.chunks} chunks  ${result.durationMs?.toFixed(0)}ms  ${speed}KB/s`);
               if (result.downloadedData) {
-                const text = new TextDecoder().decode(result.downloadedData);
-                const current = await this.app.vault.read(file);
-                if (current !== text) {
-                  await this.app.vault.modify(file, text);
-                }
+                await this.writeFile(file, result.downloadedData);
               }
               break;
             case 'conflict-resolved':
               conflicts++;
+              totalBytes += result.bytes || 0;
+              console.log(`  ⚠ ${label}  ${sizeKB}KB  ${result.chunks} chunks  ${result.durationMs?.toFixed(0)}ms`);
               if (result.downloadedData) {
-                const text = new TextDecoder().decode(result.downloadedData);
-                const current = await this.app.vault.read(file);
-                if (current !== text) {
-                  await this.app.vault.modify(file, text);
-                }
+                await this.writeFile(file, result.downloadedData);
               }
+              break;
+            default:
               break;
           }
         } catch (e) {
-          console.warn(`PQC sync error on ${file.path}:`, e);
+          console.warn(`  ✕ ${label}  ERROR:`, e);
         }
       }
 
-      // Save local metadata
       await this.state.saveMetadata(meta);
 
-      // Run GC if enabled
       if (this.settings.garbageCollectDays > 0) {
         const gcResult = await this.syncEngine.garbageCollect(meta, this.settings.garbageCollectDays);
         if (gcResult.removed > 0) {
@@ -297,9 +312,12 @@ export default class PqcWebdavPlugin extends Plugin {
         }
       }
 
+      const elapsed = ((performance.now() - tStart) / 1000).toFixed(1);
+      const avgSpeed = totalBytes > 0 ? (totalBytes / 1024 / ((performance.now() - tStart) / 1000)).toFixed(0) : '0';
       this.setStatus('ready');
+      console.log(`[PQC Sync] Done: ${uploaded}↑ ${downloaded}↓ ${conflicts}⚠  ${(totalBytes / 1024).toFixed(1)}KB total  ${elapsed}s  avg ${avgSpeed}KB/s`);
       if (uploaded + downloaded + conflicts > 0) {
-        new Notice(`PQC Sync: ${uploaded}↑ ${downloaded}↓ ${conflicts}⚠`);
+        new Notice(`PQC Sync: ${uploaded}↑ ${downloaded}↓ ${conflicts}⚠  ${elapsed}s`);
       }
     } catch (e) {
       console.error('PQC sync failed:', e);
@@ -326,10 +344,10 @@ export default class PqcWebdavPlugin extends Plugin {
 
       if (mode === 'local') {
         new Notice('Force sync: local wins — uploading all files to remote...');
-        const allFiles = this.app.vault.getMarkdownFiles();
+        const allFiles = this.app.vault.getFiles();
         let uploaded = 0;
         for (const file of allFiles) {
-          if (file.path.startsWith('.obsidian/')) continue;
+          if (this.shouldSkip(file)) continue;
           const encPath = await encryptFilename(this.masterSecret, state.vaultId, file.path);
           const localData = await this.getFileData(file);
           const result = await this.syncEngine.forceUploadFile(encPath, localData, meta);
@@ -354,8 +372,8 @@ export default class PqcWebdavPlugin extends Plugin {
         const remoteMeta = await this.syncEngine.downloadMetadata();
 
         const localToEnc = new Map<string, string>();
-        for (const file of this.app.vault.getMarkdownFiles()) {
-          if (file.path.startsWith('.obsidian/')) continue;
+        for (const file of this.app.vault.getFiles()) {
+          if (this.shouldSkip(file)) continue;
           const encPath = await encryptFilename(this.masterSecret, state.vaultId, file.path);
           localToEnc.set(file.path, encPath);
         }

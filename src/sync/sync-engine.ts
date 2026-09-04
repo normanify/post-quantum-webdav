@@ -412,7 +412,8 @@ export class SyncEngine {
     encPath: string,
     fileData: Uint8Array,
     meta: VaultMetadata
-  ): Promise<{ meta: VaultMetadata; uploaded: number }> {
+  ): Promise<{ meta: VaultMetadata; uploaded: number; chunks: number; durationMs: number; bytes: number }> {
+    const t0 = performance.now();
     const chunks = await this.chunkManager.split(fileData);
     let uploaded = 0;
     const chunkHashes: string[] = [];
@@ -442,19 +443,19 @@ export class SyncEngine {
       createdAt: existing?.createdAt || now,
       modifiedAt: now,
       deviceId: this.deviceId,
-      signature: '', // Will be signed when metadata is uploaded
+      signature: '',
     };
 
-    // Increment vector clock
     meta.vectorClock = incrementClock(meta.vectorClock, this.deviceId);
 
-    return { meta, uploaded };
+    return { meta, uploaded, chunks: chunkHashes.length, durationMs: performance.now() - t0, bytes: fileData.length };
   }
 
   async downloadFile(
     encPath: string,
     meta: VaultMetadata
-  ): Promise<Uint8Array | null> {
+  ): Promise<{ data: Uint8Array; durationMs: number; chunks: number; bytes: number } | null> {
+    const t0 = performance.now();
     const entry = meta.files[encPath];
     if (!entry || entry.chunks.length === 0) return null;
 
@@ -471,7 +472,8 @@ export class SyncEngine {
       offset += decrypted.length;
     }
 
-    return this.chunkManager.merge(chunkDataList);
+    const data = this.chunkManager.merge(chunkDataList);
+    return { data, durationMs: performance.now() - t0, chunks: entry.chunks.length, bytes: data.length };
   }
 
   async deleteFile(
@@ -551,8 +553,8 @@ export class SyncEngine {
   }
 
   async forceDownloadFile(encPath: string, meta: VaultMetadata): Promise<Uint8Array | null> {
-    const data = await this.downloadFile(encPath, meta);
-    return data;
+    const result = await this.downloadFile(encPath, meta);
+    return result?.data ?? null;
   }
 
   // --- Main Sync Entry Point ---
@@ -566,31 +568,28 @@ export class SyncEngine {
     action: 'uploaded' | 'downloaded' | 'conflict-resolved' | 'unchanged';
     conflicts?: SyncConflict[];
     downloadedData?: Uint8Array;
+    chunks?: number;
+    durationMs?: number;
+    bytes?: number;
   }> {
     const remoteMeta = await this.downloadMetadata();
 
-    // Detect conflicts
     const conflicts = this.detectConflicts(localMeta, remoteMeta);
 
     if (conflicts.length > 0) {
-      // Resolve conflicts using LWW
       const mergedMeta = this.resolveConflicts(localMeta, remoteMeta, conflicts);
 
-      // Check if local file still exists after conflict resolution
       if (mergedMeta.files[encPath]) {
-        // Local file survived → upload it
-        const { meta: uploadedMeta } = await this.uploadFile(encPath, localData, mergedMeta);
+        const { meta: uploadedMeta, chunks, durationMs, bytes } = await this.uploadFile(encPath, localData, mergedMeta);
         await this.uploadMetadata(uploadedMeta);
-        return { meta: uploadedMeta, action: 'conflict-resolved', conflicts };
+        return { meta: uploadedMeta, action: 'conflict-resolved', conflicts, chunks, durationMs, bytes };
       } else {
-        // Local file was deleted by conflict resolution → download remote
         await this.uploadMetadata(mergedMeta);
-        const downloadedData = await this.downloadFile(encPath, mergedMeta);
-        return { meta: mergedMeta, action: 'conflict-resolved', conflicts, downloadedData: downloadedData || undefined };
+        const result = await this.downloadFile(encPath, mergedMeta);
+        return { meta: mergedMeta, action: 'conflict-resolved', conflicts, downloadedData: result?.data, chunks: result?.chunks, durationMs: result?.durationMs, bytes: result?.bytes };
       }
     }
 
-    // No conflicts — compare versions
     const remoteEntry = remoteMeta.files[encPath];
     const localEntry = localMeta.files[encPath];
 
@@ -599,35 +598,31 @@ export class SyncEngine {
     }
 
     if (!remoteEntry && localEntry) {
-      // Local has file, remote doesn't → upload
-      const { meta: uploadedMeta } = await this.uploadFile(encPath, localData, remoteMeta);
+      const { meta: uploadedMeta, chunks, durationMs, bytes } = await this.uploadFile(encPath, localData, remoteMeta);
       await this.uploadMetadata(uploadedMeta);
-      return { meta: uploadedMeta, action: 'uploaded' };
+      return { meta: uploadedMeta, action: 'uploaded', chunks, durationMs, bytes };
     }
 
     if (remoteEntry && !localEntry) {
-      // Remote has file, local doesn't → download
-      const downloadedData = await this.downloadFile(encPath, remoteMeta);
-      return { meta: remoteMeta, action: 'downloaded', downloadedData: downloadedData || undefined };
+      const result = await this.downloadFile(encPath, remoteMeta);
+      return { meta: remoteMeta, action: 'downloaded', downloadedData: result?.data, chunks: result?.chunks, durationMs: result?.durationMs, bytes: result?.bytes };
     }
 
-    // Both have file — LWW by modifiedAt
     if (remoteEntry.modifiedAt > localEntry.modifiedAt) {
-      const downloadedData = await this.downloadFile(encPath, remoteMeta);
-      return { meta: remoteMeta, action: 'downloaded', downloadedData: downloadedData || undefined };
+      const result = await this.downloadFile(encPath, remoteMeta);
+      return { meta: remoteMeta, action: 'downloaded', downloadedData: result?.data, chunks: result?.chunks, durationMs: result?.durationMs, bytes: result?.bytes };
     } else if (localEntry.modifiedAt > remoteEntry.modifiedAt) {
-      const { meta: uploadedMeta } = await this.uploadFile(encPath, localData, remoteMeta);
+      const { meta: uploadedMeta, chunks, durationMs, bytes } = await this.uploadFile(encPath, localData, remoteMeta);
       await this.uploadMetadata(uploadedMeta);
-      return { meta: uploadedMeta, action: 'uploaded' };
+      return { meta: uploadedMeta, action: 'uploaded', chunks, durationMs, bytes };
     } else {
-      // Same timestamp — tiebreak by deviceId
       if (this.deviceId > localEntry.deviceId) {
-        const { meta: uploadedMeta } = await this.uploadFile(encPath, localData, remoteMeta);
+        const { meta: uploadedMeta, chunks, durationMs, bytes } = await this.uploadFile(encPath, localData, remoteMeta);
         await this.uploadMetadata(uploadedMeta);
-        return { meta: uploadedMeta, action: 'uploaded' };
+        return { meta: uploadedMeta, action: 'uploaded', chunks, durationMs, bytes };
       } else {
-        const downloadedData = await this.downloadFile(encPath, remoteMeta);
-        return { meta: remoteMeta, action: 'downloaded', downloadedData: downloadedData || undefined };
+        const result = await this.downloadFile(encPath, remoteMeta);
+        return { meta: remoteMeta, action: 'downloaded', downloadedData: result?.data, chunks: result?.chunks, durationMs: result?.durationMs, bytes: result?.bytes };
       }
     }
   }
