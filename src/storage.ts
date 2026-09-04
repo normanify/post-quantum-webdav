@@ -23,7 +23,7 @@ export class LocalState {
   private adapter: any; // Obsidian FileSystemAdapter
   private configDir: string;
 
-  constructor(adapter: any, configDir = '.obsidian') {
+  constructor(adapter: any, configDir: string) {
     this.adapter = adapter;
     this.configDir = configDir;
   }

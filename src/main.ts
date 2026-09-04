@@ -21,8 +21,7 @@ export default class PqcWebdavPlugin extends Plugin {
 
     // Local state adapter (Obsidian filesystem)
     const adapter = (this.app.vault as any).adapter;
-    const configDir = (this.app.vault as any).configDir || '.obsidian';
-    this.state = new LocalState(adapter, configDir);
+    this.state = new LocalState(adapter, this.app.vault.configDir);
 
     // Register settings tab
     this.addSettingTab(new PqcSettingTab(this.app, this, () => this.reconfigure()));
@@ -213,7 +212,7 @@ export default class PqcWebdavPlugin extends Plugin {
   }
 
   private shouldSkip(file: TFile): boolean {
-    const configDir = (this.app.vault as any).configDir || '.obsidian';
+    const configDir = this.app.vault.configDir;
     return file.path.startsWith('.') || file.path.startsWith(configDir + '/');
   }
 
