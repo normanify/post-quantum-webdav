@@ -1,6 +1,6 @@
 import { WebDavClient, WebDavConfig } from '../webdav/client';
 import { ChunkManager, ChunkInfo } from '../chunk/chunk-manager';
-import { encrypt, decrypt, sha256 } from '../crypto/aes';
+import { encrypt, decrypt, sha256, bytesToBase64, base64ToBytes } from '../crypto/aes';
 import { pqcDsa } from '../crypto/pqc-provider';
 
 const SCHEMA_VERSION = 2;
@@ -173,7 +173,7 @@ export class SyncEngine {
     });
     const sig = pqcDsa.sign(this.signingKeyPair.secretKey, new TextEncoder().encode(signPayload));
     meta.signerDeviceId = this.deviceId;
-    meta.signerPublicKey = Buffer.from(this.signingKeyPair.publicKey).toString('base64');
+    meta.signerPublicKey = bytesToBase64(this.signingKeyPair.publicKey);
     return meta;
   }
 

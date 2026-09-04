@@ -1,0 +1,10 @@
+/* PQC WebDAV Sync plugin styles */
+.pqc-status {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-right: 8px;
+}
+
+.pqc-status[title] {
+  cursor: pointer;
+}

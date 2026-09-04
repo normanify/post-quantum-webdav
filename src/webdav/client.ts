@@ -73,7 +73,7 @@ export class WebDavClient {
     if (dir) {
       await this.ensureDir(dir);
     }
-    await this.client.putFileContents(full, data as unknown as Buffer, {
+    await this.client.putFileContents(full, data as unknown as string, {
       overwrite: true,
     });
   }
@@ -81,8 +81,8 @@ export class WebDavClient {
   /** Download a remote file as Uint8Array. */
   async downloadBytes(relPath: string): Promise<Uint8Array> {
     const full = this.normalize(relPath);
-    const buf = await this.client.getFileContents(full) as Buffer;
-    return new Uint8Array(buf);
+    const buf = await this.client.getFileContents(full) as unknown as ArrayBuffer;
+    return new Uint8Array(buf as ArrayBuffer);
   }
 
   /** Delete a remote file or directory recursively. */
