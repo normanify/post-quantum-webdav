@@ -61,7 +61,7 @@ export class PqcSettingTab extends PluginSettingTab {
     containerEl.empty();
 
     // --- WebDAV Section ---
-    containerEl.createEl('h2', { text: 'WebDAV Server' });
+    new Setting(containerEl).setName('WebDAV Server').setHeading();
 
     new Setting(containerEl)
       .setName('WebDAV Server URL')
@@ -115,7 +115,7 @@ export class PqcSettingTab extends PluginSettingTab {
         }));
 
     // --- Encryption Section ---
-    containerEl.createEl('h2', { text: 'Encryption' });
+    new Setting(containerEl).setName('Encryption').setHeading();
 
     new Setting(containerEl)
       .setName('Vault Passphrase')
@@ -141,7 +141,7 @@ export class PqcSettingTab extends PluginSettingTab {
         .setDisabled(true));
 
     // --- Sync Section ---
-    containerEl.createEl('h2', { text: 'Sync' });
+    new Setting(containerEl).setName('Sync').setHeading();
 
     new Setting(containerEl)
       .setName('Auto sync')
@@ -190,7 +190,6 @@ export class PqcSettingTab extends PluginSettingTab {
       .addSlider(slider => slider
         .setLimits(1, 10, 1)
         .setValue(this.plugin.settings.parallelLimit)
-        .setDynamicTooltip()
         .onChange(async value => {
           this.plugin.settings.parallelLimit = value;
           await this.plugin.saveSettings();
@@ -213,7 +212,7 @@ export class PqcSettingTab extends PluginSettingTab {
       });
 
     // --- Deletion Section ---
-    containerEl.createEl('h2', { text: 'Deletion' });
+    new Setting(containerEl).setName('Deletion').setHeading();
 
     new Setting(containerEl)
       .setName('Garbage collection')
@@ -231,7 +230,7 @@ export class PqcSettingTab extends PluginSettingTab {
       });
 
     // --- Advanced Section ---
-    containerEl.createEl('h2', { text: 'Advanced' });
+    new Setting(containerEl).setName('Advanced').setHeading();
 
     new Setting(containerEl)
       .setName('Conflict resolution')
@@ -263,7 +262,7 @@ export class PqcSettingTab extends PluginSettingTab {
         }));
 
     // --- Force Sync Section ---
-    containerEl.createEl('h2', { text: 'Force Full Sync' });
+    new Setting(containerEl).setName('Force Full Sync').setHeading();
 
     new Setting(containerEl)
       .setName('Local wins (upload all)')

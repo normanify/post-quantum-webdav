@@ -21,13 +21,15 @@ export interface PersistedState {
  */
 export class LocalState {
   private adapter: any; // Obsidian FileSystemAdapter
+  private configDir: string;
 
-  constructor(adapter: any) {
+  constructor(adapter: any, configDir = '.obsidian') {
     this.adapter = adapter;
+    this.configDir = configDir;
   }
 
   private get statePath(): string {
-    return '.obsidian/plugins/post-quantum-webdav/state.json';
+    return `${this.configDir}/plugins/post-quantum-webdav/state.json`;
   }
 
   async load(): Promise<PersistedState | null> {
