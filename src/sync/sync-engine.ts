@@ -564,8 +564,12 @@ export class SyncEngine {
     return { meta, chunks: chunkHashes.length, durationMs, bytes: fileData.length };
   }
 
-  async forceDownloadFile(encPath: string, meta: VaultMetadata): Promise<Uint8Array | null> {
-    const result = await this.downloadFile(encPath, meta);
+  async forceDownloadFile(
+    encPath: string,
+    meta: VaultMetadata,
+    onProgress?: (chunkIndex: number, totalChunks: number, chunkBytes: number, totalBytes: number) => void
+  ): Promise<Uint8Array | null> {
+    const result = await this.downloadFile(encPath, meta, onProgress);
     return result?.data ?? null;
   }
 

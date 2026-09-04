@@ -4,8 +4,8 @@ export interface WebDavConfig {
   serverUrl: string;
   username: string;
   password: string;
-  /** Base path on server, e.g. /obtest2 */
   basePath: string;
+  timeoutMs?: number;
 }
 
 export interface FileStat {
@@ -35,11 +35,13 @@ const b64 = (input: string): string => {
 export class WebDavClient {
   private url: string;
   private auth: string;
+  private timeoutMs: number;
 
   constructor(config: WebDavConfig) {
     const base = config.serverUrl.replace(/\/+$/, '');
     this.url = `${base}/${config.basePath.replace(/^\/+|\/+$/g, '')}`;
     this.auth = `Basic ${b64(`${config.username}:${config.password}`)}`;
+    this.timeoutMs = config.timeoutMs ?? 600_000;
   }
 
   private resolve(relPath: string): string {
@@ -58,14 +60,18 @@ export class WebDavClient {
     if (opts.depth) headers.Depth = opts.depth;
     if (opts.contentType) headers['Content-Type'] = opts.contentType;
     try {
-      const res = await requestUrl({
+      const req$ = requestUrl({
         url: this.resolve(relPath),
         method,
         headers,
         body: opts.body,
         throw: false,
       });
-      if (res.status >= 400 && !opts.allowFail) return res; // report via upstream
+      const timeout$ = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error(`Request timeout after ${this.timeoutMs}ms: ${method} ${relPath}`)), this.timeoutMs)
+      );
+      const res = await Promise.race([req$, timeout$]);
+      if (res.status >= 400 && !opts.allowFail) return res;
       return res;
     } catch (e) {
       if (opts.allowFail) return undefined;

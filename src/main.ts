@@ -138,6 +138,9 @@ export default class PqcWebdavPlugin extends Plugin {
 
       const chunkSize = this.settings.chunkSizeKB * 1024;
 
+      console.log(`[PQC Config] Server: ${this.settings.serverUrl}/${this.settings.basePath}`);
+      console.log(`[PQC Config] Chunk: ${this.formatBytes(chunkSize)}, Timeout: ${this.settings.uploadTimeoutSec}s, Parallel: ${this.settings.parallelLimit}, Auto-sync: ${this.settings.syncIntervalMin}min`);
+
       // Create sync engine
       this.syncEngine = new SyncEngine({
         webdavConfig: {
@@ -145,6 +148,7 @@ export default class PqcWebdavPlugin extends Plugin {
           username: this.settings.username,
           password: this.settings.password,
           basePath: this.settings.basePath,
+          timeoutMs: this.settings.uploadTimeoutSec * 1000,
         },
         chunkSize,
         deviceId: this.persisted.device.deviceId,
@@ -268,11 +272,15 @@ export default class PqcWebdavPlugin extends Plugin {
       let uploaded = 0;
       let downloaded = 0;
       let conflicts = 0;
+      let skipped = 0;
+      let errors = 0;
       let bytesTransferred = 0;
       const totalBytesAll = filesToSync.reduce((sum, f) => sum + f.stat.size, 0);
       const tStart = performance.now();
 
+      console.log(`[PQC Sync] ═══════════════════════════════════════`);
       console.log(`[PQC Sync] Starting sync: ${filesToSync.length} files, ${this.formatBytes(totalBytesAll)} total`);
+      console.log(`[PQC Sync] Settings: chunkSize=${this.formatBytes(this.settings.chunkSizeKB * 1024)}, timeout=${this.settings.uploadTimeoutSec}s, parallel=${this.settings.parallelLimit}`);
 
       for (let i = 0; i < filesToSync.length; i++) {
         const file = filesToSync[i];
@@ -296,23 +304,29 @@ export default class PqcWebdavPlugin extends Plugin {
             const sp = bytesTransferred > 0 && (performance.now() - tStart) > 0
               ? this.formatBytes(bytesTransferred / ((performance.now() - tStart) / 1000)) + '/s'
               : '';
-            this.setStatus('syncing', `${fileNum} ${chunkBar} ${this.formatBytes(bytesTransferred)}/${this.formatBytes(totalBytesAll)} ${sp} | ↑ ${file.path} chunk ${chunkIdx}/${totalChunks}`);
+            const action = result?.action === 'downloaded' ? '↓' : '↑';
+            this.setStatus('syncing', `${fileNum} ${chunkBar} ${this.formatBytes(bytesTransferred)}/${this.formatBytes(totalBytesAll)} ${sp} | ${action} ${file.path} chunk ${chunkIdx}/${totalChunks}`);
+            if (chunkIdx % 20 === 0 || chunkIdx === totalChunks) {
+              const chunkBytes = localData.length / totalChunks;
+              const chunkElapsed = (performance.now() - tStart) / 1000;
+              const chunkSpeed = chunkBytes > 0 && chunkElapsed > 0 ? this.formatBytes(chunkBytes / chunkElapsed) + '/s' : '';
+              console.log(`    ${action} ${file.path} chunk ${chunkIdx}/${totalChunks}  ${this.formatBytes(chunkBytes)}  ${chunkSpeed}`);
+            }
           });
           meta = result.meta;
 
-          const sizeKB = (result.bytes || localData.length / 1024).toFixed(1);
-          const speed = result.durationMs ? ((result.bytes || 0) / 1024 / (result.durationMs / 1000)).toFixed(0) : '?';
+          const speed = result.durationMs ? this.formatBytes((result.bytes || 0) / (result.durationMs / 1000)) + '/s' : '?';
 
           switch (result.action) {
             case 'uploaded':
               uploaded++;
               bytesTransferred += result.bytes || 0;
-              console.log(`  ↑ ${fileNum} ${file.path}  ${this.formatBytes(result.bytes || 0)}  ${result.chunks} chunks  ${result.durationMs?.toFixed(0)}ms  ${speed}KB/s`);
+              console.log(`  ↑ [${fileNum}] ${file.path}  ${this.formatBytes(result.bytes || 0)}  ${result.chunks} chunks  ${result.durationMs?.toFixed(0)}ms  ${speed}`);
               break;
             case 'downloaded':
               downloaded++;
               bytesTransferred += result.bytes || 0;
-              console.log(`  ↓ ${fileNum} ${file.path}  ${this.formatBytes(result.bytes || 0)}  ${result.chunks} chunks  ${result.durationMs?.toFixed(0)}ms  ${speed}KB/s`);
+              console.log(`  ↓ [${fileNum}] ${file.path}  ${this.formatBytes(result.bytes || 0)}  ${result.chunks} chunks  ${result.durationMs?.toFixed(0)}ms  ${speed}`);
               if (result.downloadedData) {
                 await this.writeFile(file, result.downloadedData);
               }
@@ -320,16 +334,18 @@ export default class PqcWebdavPlugin extends Plugin {
             case 'conflict-resolved':
               conflicts++;
               bytesTransferred += result.bytes || 0;
-              console.log(`  ⚠ ${fileNum} ${file.path}  ${this.formatBytes(result.bytes || 0)}  ${result.chunks} chunks  ${result.durationMs?.toFixed(0)}ms`);
+              console.log(`  ⚠ [${fileNum}] ${file.path}  ${this.formatBytes(result.bytes || 0)}  ${result.chunks} chunks  ${result.durationMs?.toFixed(0)}ms  ${speed}  conflicts=${result.conflicts?.length}`);
               if (result.downloadedData) {
                 await this.writeFile(file, result.downloadedData);
               }
               break;
-            default:
+            case 'unchanged':
+              skipped++;
               break;
           }
         } catch (e) {
-          console.warn(`  ✕ ${fileNum} ${file.path}  ERROR:`, e);
+          errors++;
+          console.error(`  ✕ [${fileNum}] ${file.path}  ERROR:`, e);
         }
       }
 
@@ -340,6 +356,7 @@ export default class PqcWebdavPlugin extends Plugin {
         if (gcResult.removed > 0) {
           meta = gcResult.meta;
           await this.state.saveMetadata(meta);
+          console.log(`[PQC Sync] GC removed ${gcResult.removed} stale chunks`);
         }
       }
 
@@ -348,8 +365,9 @@ export default class PqcWebdavPlugin extends Plugin {
         ? this.formatBytes(bytesTransferred / ((performance.now() - tStart) / 1000)) + '/s'
         : '';
       this.setStatus('ready');
-      console.log(`[PQC Sync] Done: ${uploaded}↑ ${downloaded}↓ ${conflicts}⚠  ${this.formatBytes(bytesTransferred)} total  ${elapsed}s  ${avgSpeed}`);
-      if (uploaded + downloaded + conflicts > 0) {
+      console.log(`[PQC Sync] ───────────────────────────────────────`);
+      console.log(`[PQC Sync] Done: ${uploaded}↑ ${downloaded}↓ ${skipped}○ ${conflicts}⚠ ${errors}✕  ${this.formatBytes(bytesTransferred)} in ${elapsed}s  ${avgSpeed}`);
+      if (uploaded + downloaded + conflicts + errors > 0) {
         new Notice(`PQC Sync: ${uploaded}↑ ${downloaded}↓ ${conflicts}⚠  ${elapsed}s`);
       }
     } catch (e) {
@@ -379,10 +397,13 @@ export default class PqcWebdavPlugin extends Plugin {
         new Notice('Force sync: local wins — uploading all files to remote...');
         const allFiles = this.app.vault.getFiles().filter(f => !this.shouldSkip(f));
         let uploaded = 0;
+        let errors = 0;
         let bytesTransferred = 0;
         const totalBytesAll = allFiles.reduce((sum, f) => sum + f.stat.size, 0);
         const tStart = performance.now();
+        console.log(`[PQC Force Sync] ═══════════════════════════════════════`);
         console.log(`[PQC Force Sync] Local wins: ${allFiles.length} files, ${this.formatBytes(totalBytesAll)} total`);
+        console.log(`[PQC Force Sync] Settings: chunkSize=${this.formatBytes(this.settings.chunkSizeKB * 1024)}, timeout=${this.settings.uploadTimeoutSec}s`);
 
         for (let i = 0; i < allFiles.length; i++) {
           const file = allFiles[i];
@@ -396,29 +417,41 @@ export default class PqcWebdavPlugin extends Plugin {
             : '';
           this.setStatus('syncing', `${fileNum} ${bar} ${this.formatBytes(bytesTransferred)}/${this.formatBytes(totalBytesAll)} ${speed} | ↑ ${file.path} (${sizeStr})`);
 
-          const t0 = performance.now();
-          const encPath = await encryptFilename(this.masterSecret, state.vaultId, file.path);
-          const localData = await this.getFileData(file);
-          const result = await this.syncEngine.forceUploadFile(encPath, localData, meta, (chunkIdx, totalChunks) => {
-            const chunkPct = totalBytesAll > 0 ? (bytesTransferred + (localData.length * chunkIdx / totalChunks)) / totalBytesAll : 0;
-            const chunkBar = this.progressBar(chunkPct);
-            const sp = bytesTransferred > 0 && (performance.now() - tStart) > 0
-              ? this.formatBytes(bytesTransferred / ((performance.now() - tStart) / 1000)) + '/s'
-              : '';
-            this.setStatus('syncing', `${fileNum} ${chunkBar} ${this.formatBytes(bytesTransferred)}/${this.formatBytes(totalBytesAll)} ${sp} | ↑ ${file.path} chunk ${chunkIdx}/${totalChunks}`);
-          });
-          meta = result.meta;
-          uploaded++;
-          bytesTransferred += localData.length;
-          const fileSpeed = result.durationMs ? this.formatBytes(localData.length / (result.durationMs / 1000)) + '/s' : '?';
-          console.log(`  ↑ [${fileNum}] ${file.path}  ${this.formatBytes(localData.length)}  ${result.chunks} chunks  ${result.durationMs?.toFixed(0)}ms  ${fileSpeed}`);
+          try {
+            const t0 = performance.now();
+            const encPath = await encryptFilename(this.masterSecret, state.vaultId, file.path);
+            const localData = await this.getFileData(file);
+            const result = await this.syncEngine.forceUploadFile(encPath, localData, meta, (chunkIdx, totalChunks) => {
+              const chunkPct = totalBytesAll > 0 ? (bytesTransferred + (localData.length * chunkIdx / totalChunks)) / totalBytesAll : 0;
+              const chunkBar = this.progressBar(chunkPct);
+              const sp = bytesTransferred > 0 && (performance.now() - tStart) > 0
+                ? this.formatBytes(bytesTransferred / ((performance.now() - tStart) / 1000)) + '/s'
+                : '';
+              this.setStatus('syncing', `${fileNum} ${chunkBar} ${this.formatBytes(bytesTransferred)}/${this.formatBytes(totalBytesAll)} ${sp} | ↑ ${file.path} chunk ${chunkIdx}/${totalChunks}`);
+              if (chunkIdx % 20 === 0 || chunkIdx === totalChunks) {
+                const chunkBytes = localData.length / totalChunks;
+                const chunkElapsed = (performance.now() - tStart) / 1000;
+                const chunkSpeed = chunkBytes > 0 && chunkElapsed > 0 ? this.formatBytes(chunkBytes / chunkElapsed) + '/s' : '';
+                console.log(`    ↑ ${file.path} chunk ${chunkIdx}/${totalChunks}  ${this.formatBytes(chunkBytes)}  ${chunkSpeed}`);
+              }
+            });
+            meta = result.meta;
+            uploaded++;
+            bytesTransferred += localData.length;
+            const fileSpeed = result.durationMs ? this.formatBytes(localData.length / (result.durationMs / 1000)) + '/s' : '?';
+            console.log(`  ↑ [${fileNum}] ${file.path}  ${this.formatBytes(localData.length)}  ${result.chunks} chunks  ${result.durationMs?.toFixed(0)}ms  ${fileSpeed}`);
+          } catch (e) {
+            errors++;
+            console.error(`  ✕ [${fileNum}] ${file.path}  ERROR:`, e);
+          }
         }
 
         this.setStatus('syncing', 'Cleaning remote-only files...');
         const remoteMeta = await this.syncEngine.downloadMetadata();
+        let deleted = 0;
         for (const encPath of Object.keys(remoteMeta.files)) {
           if (!meta.files[encPath]) {
-            try { await this.syncEngine.deleteFile(encPath, meta); } catch {}
+            try { await this.syncEngine.deleteFile(encPath, meta); deleted++; } catch {}
           }
         }
 
@@ -427,14 +460,14 @@ export default class PqcWebdavPlugin extends Plugin {
         const elapsed = ((performance.now() - tStart) / 1000).toFixed(1);
         const avgSpeed = totalBytesAll > 0 ? this.formatBytes(totalBytesAll / ((performance.now() - tStart) / 1000)) + '/s' : '0';
         this.setStatus('ready');
-        console.log(`[PQC Force Sync] Done: ${uploaded}↑  ${this.formatBytes(totalBytesAll)} total  ${elapsed}s  avg ${avgSpeed}`);
-        new Notice(`Force sync (local wins): ${uploaded} files ↑  ${elapsed}s`);
+        console.log(`[PQC Force Sync] ───────────────────────────────────────`);
+        console.log(`[PQC Force Sync] Done: ${uploaded}↑ ${deleted}✕ deleted ${errors}✕ errors  ${this.formatBytes(totalBytesAll)} in ${elapsed}s  ${avgSpeed}`);
+        new Notice(`Force sync (local wins): ${uploaded} files ↑, ${deleted} deleted, ${elapsed}s`);
 
       } else {
         new Notice('Force sync: remote wins — downloading all files from remote...');
         const remoteMeta = await this.syncEngine.downloadMetadata();
         const remoteFiles = Object.entries(remoteMeta.files);
-        console.log(`[PQC Force Sync] Remote wins: ${remoteFiles.length} files`);
 
         const localToEnc = new Map<string, string>();
         for (const file of this.app.vault.getFiles()) {
@@ -450,10 +483,13 @@ export default class PqcWebdavPlugin extends Plugin {
         }
 
         let downloaded = 0;
+        let errors = 0;
         let bytesTransferred = 0;
         const totalBytesAll = remoteFiles.reduce((sum, [, e]) => sum + e.size, 0);
         const tStart = performance.now();
+        console.log(`[PQC Force Sync] ═══════════════════════════════════════`);
         console.log(`[PQC Force Sync] Remote wins: ${remoteFiles.length} files, ${this.formatBytes(totalBytesAll)} total`);
+        console.log(`[PQC Force Sync] Settings: chunkSize=${this.formatBytes(this.settings.chunkSizeKB * 1024)}, timeout=${this.settings.uploadTimeoutSec}s`);
 
         for (let i = 0; i < remoteFiles.length; i++) {
           const [encPath, remoteEntry] = remoteFiles[i];
@@ -467,26 +503,46 @@ export default class PqcWebdavPlugin extends Plugin {
             : '';
           this.setStatus('syncing', `${fileNum} ${bar} ${this.formatBytes(bytesTransferred)}/${this.formatBytes(totalBytesAll)} ${speed} | ↓ ${encPath} (${sizeStr})`);
 
-          const t0 = performance.now();
-          const data = await this.syncEngine.forceDownloadFile(encPath, remoteMeta);
-          if (data) {
-            const localFile = encToLocal.get(encPath);
-            if (localFile) {
-              await this.writeFile(localFile, data);
-            } else {
-              await this.app.vault.create(encPath.replace(/\//g, '--') + '.bin', new TextDecoder().decode(data));
+          try {
+            const t0 = performance.now();
+            const totalChunks = remoteEntry.chunks.length;
+            const data = await this.syncEngine.forceDownloadFile(encPath, remoteMeta, (chunkIdx, totalChunksParam) => {
+              const chunkPct = totalBytesAll > 0 ? (bytesTransferred + (remoteEntry.size * chunkIdx / totalChunksParam)) / totalBytesAll : 0;
+              const chunkBar = this.progressBar(chunkPct);
+              const spd = bytesTransferred > 0 && (performance.now() - tStart) > 0
+                ? this.formatBytes(bytesTransferred / ((performance.now() - tStart) / 1000)) + '/s'
+                : '';
+              this.setStatus('syncing', `${fileNum} ${chunkBar} ${this.formatBytes(bytesTransferred)}/${this.formatBytes(totalBytesAll)} ${spd} | ↓ ${encPath} chunk ${chunkIdx}/${totalChunksParam}`);
+              if (chunkIdx % 20 === 0 || chunkIdx === totalChunksParam) {
+                const chunkBytes = remoteEntry.size / totalChunksParam;
+                const chunkElapsed = (performance.now() - tStart) / 1000;
+                const chunkSpeed = chunkBytes > 0 && chunkElapsed > 0 ? this.formatBytes(chunkBytes / chunkElapsed) + '/s' : '';
+                console.log(`    ↓ ${encPath} chunk ${chunkIdx}/${totalChunksParam}  ${this.formatBytes(chunkBytes)}  ${chunkSpeed}`);
+              }
+            });
+            if (data) {
+              const localFile = encToLocal.get(encPath);
+              if (localFile) {
+                await this.writeFile(localFile, data);
+              } else {
+                await this.app.vault.create(encPath.replace(/\//g, '--') + '.bin', new TextDecoder().decode(data));
+              }
+              downloaded++;
+              bytesTransferred += data.length;
+              const spd = data.length > 0 ? this.formatBytes(data.length / ((performance.now() - t0) / 1000)) + '/s' : '?';
+              console.log(`  ↓ [${fileNum}] ${encPath}  ${this.formatBytes(data.length)}  ${remoteEntry.chunks.length} chunks  ${(performance.now() - t0).toFixed(0)}ms  ${spd}`);
             }
-            downloaded++;
-            bytesTransferred += data.length;
-            const spd = data.length > 0 ? this.formatBytes(data.length / ((performance.now() - t0) / 1000)) + '/s' : '0';
-            console.log(`  ↓ [${fileNum}] ${encPath}  ${this.formatBytes(data.length)}  ${remoteEntry.chunks.length} chunks  ${(performance.now() - t0).toFixed(0)}ms  ${spd}`);
+          } catch (e) {
+            errors++;
+            console.error(`  ✕ [${fileNum}] ${encPath}  ERROR:`, e);
           }
         }
 
+        let deleted = 0;
         for (const [path, encPath] of localToEnc) {
           if (!remoteMeta.files[encPath]) {
             const file = this.app.vault.getAbstractFileByPath(path);
-            if (file instanceof TFile) await this.app.vault.delete(file);
+            if (file instanceof TFile) { await this.app.vault.delete(file); deleted++; }
           }
         }
 
@@ -495,8 +551,9 @@ export default class PqcWebdavPlugin extends Plugin {
         const elapsed = ((performance.now() - tStart) / 1000).toFixed(1);
         const avgSpeed = totalBytesAll > 0 ? this.formatBytes(totalBytesAll / ((performance.now() - tStart) / 1000)) + '/s' : '0';
         this.setStatus('ready');
-        console.log(`[PQC Force Sync] Done: ${downloaded}↓  ${this.formatBytes(totalBytesAll)} total  ${elapsed}s  avg ${avgSpeed}`);
-        new Notice(`Force sync (remote wins): ${downloaded} files ↓  ${elapsed}s`);
+        console.log(`[PQC Force Sync] ───────────────────────────────────────`);
+        console.log(`[PQC Force Sync] Done: ${downloaded}↓ ${deleted}✕ deleted ${errors}✕ errors  ${this.formatBytes(totalBytesAll)} in ${elapsed}s  ${avgSpeed}`);
+        new Notice(`Force sync (remote wins): ${downloaded} files ↓, ${deleted} deleted, ${elapsed}s`);
       }
     } catch (e) {
       console.error('PQC force sync failed:', e);

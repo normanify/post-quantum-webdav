@@ -17,6 +17,7 @@ export interface PqcSettings {
   syncIntervalMin: number;
   chunkSizeKB: number;
   parallelLimit: number;
+  uploadTimeoutSec: number;
 
   // Deletion
   garbageCollectDays: number;
@@ -36,8 +37,9 @@ export const DEFAULT_SETTINGS: PqcSettings = {
 
   autoSync: true,
   syncIntervalMin: 5,
-  chunkSizeKB: 256,
+  chunkSizeKB: 10 * 1024,
   parallelLimit: 3,
+  uploadTimeoutSec: 600,
 
   garbageCollectDays: 30,
 
@@ -169,10 +171,10 @@ export class PqcSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName('Chunk size')
-      .setDesc('Size of each encrypted chunk (KB)')
+      .setDesc('Size of each encrypted chunk')
       .addDropdown(drop => {
-        for (const kb of [64, 128, 256, 512, 1024]) {
-          drop.addOption(String(kb), `${kb} KB`);
+        for (const mb of [1, 2, 5, 10, 20, 50, 100]) {
+          drop.addOption(String(mb * 1024), `${mb} MB`);
         }
         drop.setValue(String(this.plugin.settings.chunkSizeKB));
         drop.onChange(async value => {
@@ -194,6 +196,21 @@ export class PqcSettingTab extends PluginSettingTab {
           await this.plugin.saveSettings();
           this.onSettingsChanged();
         }));
+
+    new Setting(containerEl)
+      .setName('Upload timeout')
+      .setDesc('Maximum time in minutes for a single chunk upload before retry')
+      .addDropdown(drop => {
+        for (const min of [2, 5, 10, 20, 30]) {
+          drop.addOption(String(min * 60), `${min} min`);
+        }
+        drop.setValue(String(this.plugin.settings.uploadTimeoutSec));
+        drop.onChange(async value => {
+          this.plugin.settings.uploadTimeoutSec = Number(value);
+          await this.plugin.saveSettings();
+          this.onSettingsChanged();
+        });
+      });
 
     // --- Deletion Section ---
     containerEl.createEl('h2', { text: 'Deletion' });
