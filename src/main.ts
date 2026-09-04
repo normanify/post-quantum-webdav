@@ -185,15 +185,19 @@ export default class PqcWebdavPlugin extends Plugin {
       error: '✕',
       off: '',
     };
-    const label: Record<string, string> = {
-      idle: 'PQC idle',
-      syncing: 'PQC syncing...',
-      ready: 'PQC synced',
-      config: 'PQC not configured',
-      error: `PQC error: ${detail}`,
-      off: '',
-    };
-    this.statusItem.setText(`${icon[state] || ''} ${label[state] || ''}`.trim());
+    const prefix = `${icon[state] || ''}`.trim();
+    if (state === 'syncing' && detail) {
+      this.statusItem.setText(`${prefix} ${detail}`);
+    } else {
+      const label: Record<string, string> = {
+        idle: 'PQC idle',
+        ready: 'PQC synced',
+        config: 'PQC not configured',
+        error: `PQC error: ${detail}`,
+        off: '',
+      };
+      this.statusItem.setText(`${prefix} ${label[state] || ''}`.trim());
+    }
     this.statusItem.addClass('pqc-status');
   }
 
@@ -205,6 +209,18 @@ export default class PqcWebdavPlugin extends Plugin {
 
   private shouldSkip(file: TFile): boolean {
     return file.path.startsWith('.') || file.path.startsWith('.obsidian/');
+  }
+
+  private progressBar(ratio: number, width = 10): string {
+    const filled = Math.round(ratio * width);
+    const empty = width - filled;
+    return '█'.repeat(filled) + '░'.repeat(empty);
+  }
+
+  private formatBytes(bytes: number): string {
+    if (bytes < 1024) return `${bytes}B`;
+    if (bytes < 1048576) return `${(bytes / 1024).toFixed(1)}KB`;
+    return `${(bytes / 1048576).toFixed(1)}MB`;
   }
 
   private async writeFile(file: TFile, data: Uint8Array): Promise<void> {
@@ -252,23 +268,36 @@ export default class PqcWebdavPlugin extends Plugin {
       let uploaded = 0;
       let downloaded = 0;
       let conflicts = 0;
-      let totalBytes = 0;
+      let bytesTransferred = 0;
+      const totalBytesAll = filesToSync.reduce((sum, f) => sum + f.stat.size, 0);
       const tStart = performance.now();
 
-      console.log(`[PQC Sync] Starting sync: ${filesToSync.length} files`);
+      console.log(`[PQC Sync] Starting sync: ${filesToSync.length} files, ${this.formatBytes(totalBytesAll)} total`);
 
       for (let i = 0; i < filesToSync.length; i++) {
         const file = filesToSync[i];
-        const fileNum = `[${i + 1}/${filesToSync.length}]`;
-        const sizeStr = (file.stat.size / 1024).toFixed(1);
-        this.setStatus('syncing', `${fileNum} ${file.path} (${sizeStr}KB)`);
+        const fileNum = `${i + 1}/${filesToSync.length}`;
+        const sizeStr = this.formatBytes(file.stat.size);
+        const pct = totalBytesAll > 0 ? bytesTransferred / totalBytesAll : 0;
+        const bar = this.progressBar(pct);
+        const elapsed = ((performance.now() - tStart) / 1000).toFixed(0);
+        const speed = bytesTransferred > 0 && (performance.now() - tStart) > 0
+          ? this.formatBytes(bytesTransferred / ((performance.now() - tStart) / 1000)) + '/s'
+          : '';
+        this.setStatus('syncing', `${fileNum} ${bar} ${this.formatBytes(bytesTransferred)}/${this.formatBytes(totalBytesAll)} ${speed} | ${file.path} (${sizeStr})`);
 
         try {
           const encPath = await encryptFilename(this.masterSecret, state.vaultId, file.path);
           const localData = await this.getFileData(file);
 
           const result = await this.syncEngine.syncFile(encPath, localData, meta, (chunkIdx, totalChunks) => {
-            this.setStatus('syncing', `${fileNum} ${file.path} (${sizeStr}KB) chunk ${chunkIdx}/${totalChunks}`);
+            const chunkPct = totalBytesAll > 0 ? (bytesTransferred + (localData.length * chunkIdx / totalChunks)) / totalBytesAll : 0;
+            const chunkBar = this.progressBar(chunkPct);
+            const sp = bytesTransferred > 0 && (performance.now() - tStart) > 0
+              ? this.formatBytes(bytesTransferred / ((performance.now() - tStart) / 1000)) + '/s'
+              : '';
+            const arrow = result.action === 'downloaded' ? '↓' : '↑';
+            this.setStatus('syncing', `${fileNum} ${chunkBar} ${this.formatBytes(bytesTransferred)}/${this.formatBytes(totalBytesAll)} ${sp} | ${arrow} ${file.path} chunk ${chunkIdx}/${totalChunks}`);
           });
           meta = result.meta;
 
@@ -278,21 +307,21 @@ export default class PqcWebdavPlugin extends Plugin {
           switch (result.action) {
             case 'uploaded':
               uploaded++;
-              totalBytes += result.bytes || 0;
-              console.log(`  ↑ ${fileNum} ${file.path}  ${sizeKB}KB  ${result.chunks} chunks  ${result.durationMs?.toFixed(0)}ms  ${speed}KB/s`);
+              bytesTransferred += result.bytes || 0;
+              console.log(`  ↑ ${fileNum} ${file.path}  ${this.formatBytes(result.bytes || 0)}  ${result.chunks} chunks  ${result.durationMs?.toFixed(0)}ms  ${speed}KB/s`);
               break;
             case 'downloaded':
               downloaded++;
-              totalBytes += result.bytes || 0;
-              console.log(`  ↓ ${fileNum} ${file.path}  ${sizeKB}KB  ${result.chunks} chunks  ${result.durationMs?.toFixed(0)}ms  ${speed}KB/s`);
+              bytesTransferred += result.bytes || 0;
+              console.log(`  ↓ ${fileNum} ${file.path}  ${this.formatBytes(result.bytes || 0)}  ${result.chunks} chunks  ${result.durationMs?.toFixed(0)}ms  ${speed}KB/s`);
               if (result.downloadedData) {
                 await this.writeFile(file, result.downloadedData);
               }
               break;
             case 'conflict-resolved':
               conflicts++;
-              totalBytes += result.bytes || 0;
-              console.log(`  ⚠ ${fileNum} ${file.path}  ${sizeKB}KB  ${result.chunks} chunks  ${result.durationMs?.toFixed(0)}ms`);
+              bytesTransferred += result.bytes || 0;
+              console.log(`  ⚠ ${fileNum} ${file.path}  ${this.formatBytes(result.bytes || 0)}  ${result.chunks} chunks  ${result.durationMs?.toFixed(0)}ms`);
               if (result.downloadedData) {
                 await this.writeFile(file, result.downloadedData);
               }
@@ -316,9 +345,11 @@ export default class PqcWebdavPlugin extends Plugin {
       }
 
       const elapsed = ((performance.now() - tStart) / 1000).toFixed(1);
-      const avgSpeed = totalBytes > 0 ? (totalBytes / 1024 / ((performance.now() - tStart) / 1000)).toFixed(0) : '0';
+      const avgSpeed = bytesTransferred > 0 && (performance.now() - tStart) > 0
+        ? this.formatBytes(bytesTransferred / ((performance.now() - tStart) / 1000)) + '/s'
+        : '';
       this.setStatus('ready');
-      console.log(`[PQC Sync] Done: ${uploaded}↑ ${downloaded}↓ ${conflicts}⚠  ${(totalBytes / 1024).toFixed(1)}KB total  ${elapsed}s  avg ${avgSpeed}KB/s`);
+      console.log(`[PQC Sync] Done: ${uploaded}↑ ${downloaded}↓ ${conflicts}⚠  ${this.formatBytes(bytesTransferred)} total  ${elapsed}s  ${avgSpeed}`);
       if (uploaded + downloaded + conflicts > 0) {
         new Notice(`PQC Sync: ${uploaded}↑ ${downloaded}↓ ${conflicts}⚠  ${elapsed}s`);
       }
