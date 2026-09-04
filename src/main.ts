@@ -20,7 +20,7 @@ export default class PqcWebdavPlugin extends Plugin {
     await this.loadSettings();
 
     // Local state adapter (Obsidian filesystem)
-    const adapter = (this.app.vault as any).adapter;
+    const adapter = this.app.vault.adapter;
     this.state = new LocalState(adapter, this.app.vault.configDir);
 
     // Register settings tab
@@ -206,7 +206,7 @@ export default class PqcWebdavPlugin extends Plugin {
   }
 
   private async getFileData(file: TFile): Promise<Uint8Array> {
-    const adapter = (this.app.vault as any).adapter;
+    const adapter = this.app.vault.adapter;
     const buffer = await adapter.readBinary(file.path);
     return new Uint8Array(buffer);
   }
@@ -231,8 +231,9 @@ export default class PqcWebdavPlugin extends Plugin {
   }
 
   private async writeFile(file: TFile, data: Uint8Array): Promise<void> {
-    const adapter = (this.app.vault as any).adapter;
-    await adapter.writeBinary(file.path, data.buffer);
+    const adapter = this.app.vault.adapter;
+    const buffer = new Uint8Array(data).buffer as ArrayBuffer;
+    await adapter.writeBinary(file.path, buffer);
   }
 
   private onFileChanged(file: TFile) {
@@ -291,7 +292,6 @@ export default class PqcWebdavPlugin extends Plugin {
         const sizeStr = this.formatBytes(file.stat.size);
         const pct = totalBytesAll > 0 ? bytesTransferred / totalBytesAll : 0;
         const bar = this.progressBar(pct);
-        const elapsed = ((performance.now() - tStart) / 1000).toFixed(0);
         const speed = bytesTransferred > 0 && (performance.now() - tStart) > 0
           ? this.formatBytes(bytesTransferred / ((performance.now() - tStart) / 1000)) + '/s'
           : '';
@@ -414,14 +414,12 @@ export default class PqcWebdavPlugin extends Plugin {
           const sizeStr = this.formatBytes(file.stat.size);
           const pct = totalBytesAll > 0 ? bytesTransferred / totalBytesAll : 0;
           const bar = this.progressBar(pct);
-          const elapsed = ((performance.now() - tStart) / 1000).toFixed(0);
           const speed = bytesTransferred > 0 && (performance.now() - tStart) > 0
             ? this.formatBytes(bytesTransferred / ((performance.now() - tStart) / 1000)) + '/s'
             : '';
           this.setStatus('syncing', `${fileNum} ${bar} ${this.formatBytes(bytesTransferred)}/${this.formatBytes(totalBytesAll)} ${speed} | ↑ ${file.path} (${sizeStr})`);
 
           try {
-            const t0 = performance.now();
             const encPath = await encryptFilename(this.masterSecret, state.vaultId, file.path);
             const localData = await this.getFileData(file);
             const result = await this.syncEngine.forceUploadFile(encPath, localData, meta, (chunkIdx, totalChunks) => {
@@ -500,7 +498,6 @@ export default class PqcWebdavPlugin extends Plugin {
           const sizeStr = this.formatBytes(remoteEntry.size);
           const pct = totalBytesAll > 0 ? bytesTransferred / totalBytesAll : 0;
           const bar = this.progressBar(pct);
-          const elapsed = ((performance.now() - tStart) / 1000).toFixed(0);
           const speed = bytesTransferred > 0 && (performance.now() - tStart) > 0
             ? this.formatBytes(bytesTransferred / ((performance.now() - tStart) / 1000)) + '/s'
             : '';
@@ -508,7 +505,6 @@ export default class PqcWebdavPlugin extends Plugin {
 
           try {
             const t0 = performance.now();
-            const totalChunks = remoteEntry.chunks.length;
             const data = await this.syncEngine.forceDownloadFile(encPath, remoteMeta, (chunkIdx, totalChunksParam) => {
               const chunkPct = totalBytesAll > 0 ? (bytesTransferred + (remoteEntry.size * chunkIdx / totalChunksParam)) / totalBytesAll : 0;
               const chunkBar = this.progressBar(chunkPct);
@@ -545,7 +541,7 @@ export default class PqcWebdavPlugin extends Plugin {
         for (const [path, encPath] of localToEnc) {
           if (!remoteMeta.files[encPath]) {
             const file = this.app.vault.getAbstractFileByPath(path);
-            if (file instanceof TFile) { await this.app.vault.delete(file); deleted++; }
+            if (file instanceof TFile) { await this.app.fileManager.trashFile(file); deleted++; }
           }
         }
 

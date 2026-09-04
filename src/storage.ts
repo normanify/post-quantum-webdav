@@ -1,10 +1,10 @@
 import {
   DeviceKeys,
   createDevice,
-  deriveVaultMasterSecret,
 } from './crypto/key-manager';
 import { VaultMetadata, createEmptyMetadata } from './sync/sync-engine';
 import { bytesToBase64, base64ToBytes } from './crypto/aes';
+import { DataAdapter } from 'obsidian';
 
 /** Metadata + device state persisted to the plugin data directory */
 export interface PersistedState {
@@ -14,16 +14,25 @@ export interface PersistedState {
   lastSync: string | null;
 }
 
+/** JSON-serializable form of {@link PersistedState} with base64-encoded keys. */
+export interface SerializablePersistedState extends Omit<PersistedState, 'device'> {
+  device: {
+    deviceId: string;
+    signingKeyPair: { publicKey: string; secretKey: string };
+    encryptionKeyPair?: { publicKey: string; secretKey: string };
+  };
+}
+
 /**
  * Local storage adapter for device keys and metadata.
  * Uses Obsidian's plugin data directory (data.json for settings,
  * and a separate state file for keys/metadata to keep sizes small).
  */
 export class LocalState {
-  private adapter: any; // Obsidian FileSystemAdapter
+  private adapter: DataAdapter;
   private configDir: string;
 
-  constructor(adapter: any, configDir: string) {
+  constructor(adapter: DataAdapter, configDir: string) {
     this.adapter = adapter;
     this.configDir = configDir;
   }
@@ -56,7 +65,7 @@ export class LocalState {
   }
 
   async save(state: PersistedState): Promise<void> {
-    const serializable: any = {
+    const serializable: SerializablePersistedState = {
       ...state,
       // Encode keys as base64 for JSON serialization
       device: {

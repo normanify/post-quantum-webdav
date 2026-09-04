@@ -1,4 +1,13 @@
-import { App, Notice, PluginSettingTab, Setting } from 'obsidian';
+import { App, Notice, Plugin, PluginSettingTab, Setting } from 'obsidian';
+
+/** Plugin surface consumed by the settings tab. Kept narrow to avoid a
+ *  circular dependency with the plugin class while preserving type safety. */
+interface PqcPluginApi extends Plugin {
+  settings: PqcSettings;
+  saveSettings(): Promise<void>;
+  testConnection(): Promise<boolean>;
+  forceFullSync(mode: 'local' | 'remote'): Promise<void>;
+}
 
 /** Plugin settings persisted to data.json */
 export interface PqcSettings {
@@ -47,10 +56,10 @@ export const DEFAULT_SETTINGS: PqcSettings = {
 };
 
 export class PqcSettingTab extends PluginSettingTab {
-  private plugin: any;
+  private plugin: PqcPluginApi;
   private onSettingsChanged: () => void;
 
-  constructor(app: App, plugin: any, onSettingsChanged: () => void) {
+  constructor(app: App, plugin: PqcPluginApi, onSettingsChanged: () => void) {
     super(app, plugin);
     this.plugin = plugin;
     this.onSettingsChanged = onSettingsChanged;

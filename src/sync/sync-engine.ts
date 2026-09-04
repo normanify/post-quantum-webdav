@@ -1,7 +1,6 @@
 import { WebDavClient, WebDavConfig } from '../webdav/client';
-import { ChunkManager, ChunkInfo } from '../chunk/chunk-manager';
-import { encrypt, decrypt, sha256, bytesToBase64, base64ToBytes } from '../crypto/aes';
-import { pqcDsa } from '../crypto/pqc-provider';
+import { ChunkManager } from '../chunk/chunk-manager';
+import { encrypt, decrypt, sha256, bytesToBase64 } from '../crypto/aes';
 
 /** onProgress callback for chunk-level progress. `direction` is 'up' (upload) or 'down' (download). */
 export type ProgressCallback = (
@@ -164,23 +163,7 @@ export class SyncEngine {
     return new Uint8Array(bits);
   };
 
-  private computeChunkSignature = async (chunkHash: string, data: Uint8Array): Promise<Uint8Array> => {
-    const chunkDataHash = await sha256(data);
-    const payload = new TextEncoder().encode(
-      JSON.stringify({ vaultId: this.vaultId, chunkHash, chunkDataHash, deviceId: this.deviceId })
-    );
-    return pqcDsa.sign(this.signingKeyPair.secretKey, payload);
-  };
-
   private signMetadata(meta: VaultMetadata): VaultMetadata {
-    const signPayload = JSON.stringify({
-      vaultId: meta.vaultId,
-      sequence: meta.sequence,
-      vectorClock: meta.vectorClock,
-      files: meta.files,
-      deleted: meta.deleted,
-    });
-    const sig = pqcDsa.sign(this.signingKeyPair.secretKey, new TextEncoder().encode(signPayload));
     meta.signerDeviceId = this.deviceId;
     meta.signerPublicKey = bytesToBase64(this.signingKeyPair.publicKey);
     return meta;
@@ -350,13 +333,6 @@ export class SyncEngine {
           if (remoteTime > localTime || (remoteTime === localTime && remoteEntry.deviceId > conflict.localEntry.deviceId)) {
             // Remote wins
             merged.files[conflict.path] = remoteEntry;
-            // Copy chunk metadata from remote
-            for (const hash of remoteEntry.chunks) {
-              if (remoteMeta.files[conflict.path]) {
-                // Chunk metadata is stored separately in the full remote metadata
-                // We need to get it from remoteMeta.chunks if it exists
-              }
-            }
           }
           // If local wins, keep local (already in merged)
           break;
@@ -433,7 +409,6 @@ export class SyncEngine {
 
       const keyBytes = await this.deriveChunkKey(info.hash);
       const encrypted = await encrypt(keyBytes, data);
-      const sig = await this.computeChunkSignature(info.hash, data);
       const chunkPath = `chunks/${info.hash}.bin.enc`;
       await this.webdav.uploadBytes(chunkPath, encrypted);
       chunkHashes.push(info.hash);
@@ -560,7 +535,6 @@ export class SyncEngine {
       const { data, info } = chunks[i];
       const keyBytes = await this.deriveChunkKey(info.hash);
       const encrypted = await encrypt(keyBytes, data);
-      const sig = await this.computeChunkSignature(info.hash, data);
       await this.webdav.uploadBytes(`chunks/${info.hash}.bin.enc`, encrypted);
       chunkHashes.push(info.hash);
       if (onProgress) onProgress(i + 1, chunks.length, data.length, fileData.length, 'up');

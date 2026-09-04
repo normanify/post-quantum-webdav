@@ -5,9 +5,6 @@
  * mobile Obsidian. No native Node crypto dependency.
  */
 
-const encoder = new TextEncoder();
-const decoder = new TextDecoder();
-
 /** Export raw bytes to base64url string (no padding). */
 export function bytesToBase64(bytes: Uint8Array): string {
   let bin = '';
