@@ -51,7 +51,7 @@ export class WebDavClient {
     method: string,
     relPath: string,
     opts: { body?: string | ArrayBuffer; depth?: string; contentType?: string; allowFail?: boolean } = {}
-  ): Promise<ReturnType<typeof requestUrl> extends Promise<infer R> ? R : never> | undefined {
+  ): Promise<{ status: number; headers: Record<string, string>; arrayBuffer: ArrayBuffer; json: any; text: string } | undefined> {
     const headers: Record<string, string> = {
       Authorization: this.auth,
     };

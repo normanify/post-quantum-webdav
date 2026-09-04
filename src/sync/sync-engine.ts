@@ -517,6 +517,44 @@ export class SyncEngine {
     return { meta, removed };
   }
 
+  // --- Force Full Sync ---
+
+  async forceUploadFile(
+    encPath: string,
+    fileData: Uint8Array,
+    meta: VaultMetadata
+  ): Promise<{ meta: VaultMetadata }> {
+    delete meta.deleted[encPath];
+
+    const chunks = await this.chunkManager.split(fileData);
+    const chunkHashes: string[] = [];
+
+    for (const { data, info } of chunks) {
+      const keyBytes = await this.deriveChunkKey(info.hash);
+      const encrypted = await encrypt(keyBytes, data);
+      const sig = await this.computeChunkSignature(info.hash, data);
+      await this.webdav.uploadBytes(`chunks/${info.hash}.bin.enc`, encrypted);
+      chunkHashes.push(info.hash);
+    }
+
+    const now = new Date().toISOString();
+    meta.files[encPath] = {
+      chunks: chunkHashes,
+      size: fileData.length,
+      createdAt: meta.files[encPath]?.createdAt || now,
+      modifiedAt: now,
+      deviceId: this.deviceId,
+      signature: '',
+    };
+    meta.vectorClock = incrementClock(meta.vectorClock, this.deviceId);
+    return { meta };
+  }
+
+  async forceDownloadFile(encPath: string, meta: VaultMetadata): Promise<Uint8Array | null> {
+    const data = await this.downloadFile(encPath, meta);
+    return data;
+  }
+
   // --- Main Sync Entry Point ---
 
   async syncFile(

@@ -50,6 +50,18 @@ export default class PqcWebdavPlugin extends Plugin {
       callback: () => this.syncNow('pull'),
     });
 
+    this.addCommand({
+      id: 'pqc-force-local-wins',
+      name: 'Force sync: local wins',
+      callback: () => this.forceFullSync('local'),
+    });
+
+    this.addCommand({
+      id: 'pqc-force-remote-wins',
+      name: 'Force sync: remote wins',
+      callback: () => this.forceFullSync('remote'),
+    });
+
     // Status bar
     this.statusItem = this.addStatusBarItem();
     this.setStatus('idle');
@@ -293,6 +305,99 @@ export default class PqcWebdavPlugin extends Plugin {
       console.error('PQC sync failed:', e);
       this.setStatus('error', e instanceof Error ? e.message : String(e));
       new Notice(`PQC Sync failed: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      this.syncInProgress = false;
+    }
+  }
+
+  async forceFullSync(mode: 'local' | 'remote') {
+    if (!this.syncEngine || !this.masterSecret) {
+      this.setStatus('config');
+      return;
+    }
+    if (this.syncInProgress) return;
+    this.syncInProgress = true;
+    this.setStatus('syncing');
+
+    try {
+      const state = await this.state.load();
+      if (!state) return;
+      let meta = state.metadata;
+
+      if (mode === 'local') {
+        new Notice('Force sync: local wins — uploading all files to remote...');
+        const allFiles = this.app.vault.getMarkdownFiles();
+        let uploaded = 0;
+        for (const file of allFiles) {
+          if (file.path.startsWith('.obsidian/')) continue;
+          const encPath = await encryptFilename(this.masterSecret, state.vaultId, file.path);
+          const localData = await this.getFileData(file);
+          const result = await this.syncEngine.forceUploadFile(encPath, localData, meta);
+          meta = result.meta;
+          uploaded++;
+        }
+
+        const remoteMeta = await this.syncEngine.downloadMetadata();
+        for (const encPath of Object.keys(remoteMeta.files)) {
+          if (!meta.files[encPath]) {
+            try { await this.syncEngine.deleteFile(encPath, meta); } catch {}
+          }
+        }
+
+        await this.syncEngine.uploadMetadata(meta);
+        await this.state.saveMetadata(meta);
+        this.setStatus('ready');
+        new Notice(`Force sync (local wins): ${uploaded} files uploaded`);
+
+      } else {
+        new Notice('Force sync: remote wins — downloading all files from remote...');
+        const remoteMeta = await this.syncEngine.downloadMetadata();
+
+        const localToEnc = new Map<string, string>();
+        for (const file of this.app.vault.getMarkdownFiles()) {
+          if (file.path.startsWith('.obsidian/')) continue;
+          const encPath = await encryptFilename(this.masterSecret, state.vaultId, file.path);
+          localToEnc.set(file.path, encPath);
+        }
+
+        const encToLocal = new Map<string, TFile>();
+        for (const [path, enc] of localToEnc) {
+          const file = this.app.vault.getAbstractFileByPath(path);
+          if (file instanceof TFile) encToLocal.set(enc, file);
+        }
+
+        let downloaded = 0;
+        for (const [encPath, remoteEntry] of Object.entries(remoteMeta.files)) {
+          const data = await this.syncEngine.forceDownloadFile(encPath, remoteMeta);
+          if (data) {
+            const text = new TextDecoder().decode(data);
+            const localFile = encToLocal.get(encPath);
+            if (localFile) {
+              const current = await this.app.vault.read(localFile);
+              if (current !== text) await this.app.vault.modify(localFile, text);
+            } else {
+              await this.app.vault.create(encPath.replace(/\//g, '--') + '.md', text);
+            }
+            downloaded++;
+          }
+        }
+
+        for (const [path, encPath] of localToEnc) {
+          if (!remoteMeta.files[encPath]) {
+            const file = this.app.vault.getAbstractFileByPath(path);
+            if (file instanceof TFile) await this.app.vault.delete(file);
+          }
+        }
+
+        await this.syncEngine.uploadMetadata(remoteMeta);
+        await this.state.saveMetadata(remoteMeta);
+        this.setStatus('ready');
+        new Notice(`Force sync (remote wins): ${downloaded} files downloaded`);
+      }
+    } catch (e) {
+      console.error('PQC force sync failed:', e);
+      this.setStatus('error', e instanceof Error ? e.message : String(e));
+      new Notice(`Force sync failed: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
       this.syncInProgress = false;
     }

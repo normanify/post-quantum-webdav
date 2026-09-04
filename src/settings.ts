@@ -244,5 +244,28 @@ export class PqcSettingTab extends PluginSettingTab {
             new Notice(`Connection error: ${e instanceof Error ? e.message : String(e)}`);
           }
         }));
+
+    // --- Force Sync Section ---
+    containerEl.createEl('h2', { text: 'Force Full Sync' });
+
+    new Setting(containerEl)
+      .setName('Local wins (upload all)')
+      .setDesc('Overwrite remote with local vault. All remote-only files will be deleted.')
+      .addButton(btn => btn
+        .setButtonText('Force local → remote')
+        .setWarning()
+        .onClick(async () => {
+          await this.plugin.forceFullSync('local');
+        }));
+
+    new Setting(containerEl)
+      .setName('Remote wins (download all)')
+      .setDesc('Overwrite local vault with remote. All local-only files will be deleted.')
+      .addButton(btn => btn
+        .setButtonText('Force remote → local')
+        .setWarning()
+        .onClick(async () => {
+          await this.plugin.forceFullSync('remote');
+        }));
   }
 }
