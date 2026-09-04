@@ -259,14 +259,17 @@ export default class PqcWebdavPlugin extends Plugin {
 
       for (let i = 0; i < filesToSync.length; i++) {
         const file = filesToSync[i];
-        const label = `[${i + 1}/${filesToSync.length}] ${file.path}`;
-        this.setStatus('syncing', label);
+        const fileNum = `[${i + 1}/${filesToSync.length}]`;
+        const sizeStr = (file.stat.size / 1024).toFixed(1);
+        this.setStatus('syncing', `${fileNum} ${file.path} (${sizeStr}KB)`);
 
         try {
           const encPath = await encryptFilename(this.masterSecret, state.vaultId, file.path);
           const localData = await this.getFileData(file);
 
-          const result = await this.syncEngine.syncFile(encPath, localData, meta);
+          const result = await this.syncEngine.syncFile(encPath, localData, meta, (chunkIdx, totalChunks) => {
+            this.setStatus('syncing', `${fileNum} ${file.path} (${sizeStr}KB) chunk ${chunkIdx}/${totalChunks}`);
+          });
           meta = result.meta;
 
           const sizeKB = (result.bytes || localData.length / 1024).toFixed(1);
@@ -276,12 +279,12 @@ export default class PqcWebdavPlugin extends Plugin {
             case 'uploaded':
               uploaded++;
               totalBytes += result.bytes || 0;
-              console.log(`  ↑ ${label}  ${sizeKB}KB  ${result.chunks} chunks  ${result.durationMs?.toFixed(0)}ms  ${speed}KB/s`);
+              console.log(`  ↑ ${fileNum} ${file.path}  ${sizeKB}KB  ${result.chunks} chunks  ${result.durationMs?.toFixed(0)}ms  ${speed}KB/s`);
               break;
             case 'downloaded':
               downloaded++;
               totalBytes += result.bytes || 0;
-              console.log(`  ↓ ${label}  ${sizeKB}KB  ${result.chunks} chunks  ${result.durationMs?.toFixed(0)}ms  ${speed}KB/s`);
+              console.log(`  ↓ ${fileNum} ${file.path}  ${sizeKB}KB  ${result.chunks} chunks  ${result.durationMs?.toFixed(0)}ms  ${speed}KB/s`);
               if (result.downloadedData) {
                 await this.writeFile(file, result.downloadedData);
               }
@@ -289,7 +292,7 @@ export default class PqcWebdavPlugin extends Plugin {
             case 'conflict-resolved':
               conflicts++;
               totalBytes += result.bytes || 0;
-              console.log(`  ⚠ ${label}  ${sizeKB}KB  ${result.chunks} chunks  ${result.durationMs?.toFixed(0)}ms`);
+              console.log(`  ⚠ ${fileNum} ${file.path}  ${sizeKB}KB  ${result.chunks} chunks  ${result.durationMs?.toFixed(0)}ms`);
               if (result.downloadedData) {
                 await this.writeFile(file, result.downloadedData);
               }
@@ -298,7 +301,7 @@ export default class PqcWebdavPlugin extends Plugin {
               break;
           }
         } catch (e) {
-          console.warn(`  ✕ ${label}  ERROR:`, e);
+          console.warn(`  ✕ ${fileNum} ${file.path}  ERROR:`, e);
         }
       }
 
