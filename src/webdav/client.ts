@@ -73,7 +73,13 @@ export class WebDavClient {
     if (dir) {
       await this.ensureDir(dir);
     }
-    await this.client.putFileContents(full, data as unknown as string, {
+    // Copy into a detached ArrayBuffer; the webdav web build only accepts
+    // ArrayBuffer or string for content (Uint8Array/Blob are rejected).
+    const buffer = data.buffer.slice(
+      data.byteOffset,
+      data.byteOffset + data.byteLength
+    ) as ArrayBuffer;
+    await this.client.putFileContents(full, buffer, {
       overwrite: true,
     });
   }

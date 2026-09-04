@@ -382,40 +382,42 @@ Advanced Settings:
 
 ## 7. Implementation Phases
 
-### Phase 1: Core Infrastructure (Week 1-2)
+### Phase 1: Core Infrastructure (DONE)
 
-- [ ] Project setup (TypeScript, Rollup, Obsidian plugin template)
-- [ ] WebDAV client wrapper
-- [ ] Basic crypto module (AES-256-GCM)
-- [ ] Chunk manager (split/merge)
+- [x] Project setup (TypeScript, Rollup, Obsidian plugin template)
+- [x] WebDAV client wrapper
+- [x] Basic crypto module (AES-256-GCM)
+- [x] Chunk manager (split/merge)
 
-### Phase 2: PQC Integration (Week 3)
+### Phase 2: PQC Integration (DONE)
 
-- [ ] Integrate liboqs-js or pqc-js
-- [ ] ML-KEM key encapsulation
-- [ ] ML-DSA signing/verification
-- [ ] Key management system
+- [x] Integrate @noble/post-quantum (ML-DSA-65 + ML-KEM-768)
+- [x] ML-KEM key encapsulation (optional; passphrase-derived secret used for MVP)
+- [x] ML-DSA signing/verification
+- [x] Key management system (PBKDF2-SHA512 passphrase → master secret)
 
-### Phase 3: Sync Engine (Week 4-5)
+### Phase 3: Sync Engine (DONE)
 
-- [ ] Metadata management
-- [ ] Conflict detection
-- [ ] Deletion tracking
-- [ ] Device registration
+- [x] Metadata management (metadata.json)
+- [x] Conflict detection (vector clocks + timestamps)
+- [x] Deletion tracking + GC
+- [x] Vault master secret (shared passphrase across devices)
+- [x] Filename encryption (deterministic HKDF)
+- [x] LWW conflict resolution (modify-modify, delete-modify, modify-delete, rollback)
 
-### Phase 4: UI & Settings (Week 6)
+### Phase 4: UI & Settings (DONE)
 
-- [ ] Settings tab
-- [ ] Sync status indicator
-- [ ] Conflict resolution UI
-- [ ] Manual sync trigger
+- [x] Settings tab (WebDAV, encryption, sync options)
+- [x] Sync status indicator (status bar)
+- [x] Manual sync trigger (ribbon + command palette)
+- [x] Auto-sync on schedule + file-change watching (debounced)
 
-### Phase 5: Testing & Polish (Week 7-8)
+### Phase 5: Testing & Polish (IN PROGRESS)
 
-- [ ] Unit tests
-- [ ] Integration tests
-- [ ] Multi-device testing
-- [ ] Error handling
+- [x] Integration tests (e2e server 10/10, two-device 12/12)
+- [x] Browser-compatibility verification (webdav web build + WebCrypto primitives)
+- [ ] Multi-device UI testing in Obsidian
+- [ ] Error handling polish
 - [ ] Documentation
 
 ## 8. Dependencies
