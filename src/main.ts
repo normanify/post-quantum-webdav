@@ -296,8 +296,7 @@ export default class PqcWebdavPlugin extends Plugin {
             const sp = bytesTransferred > 0 && (performance.now() - tStart) > 0
               ? this.formatBytes(bytesTransferred / ((performance.now() - tStart) / 1000)) + '/s'
               : '';
-            const arrow = result.action === 'downloaded' ? '↓' : '↑';
-            this.setStatus('syncing', `${fileNum} ${chunkBar} ${this.formatBytes(bytesTransferred)}/${this.formatBytes(totalBytesAll)} ${sp} | ${arrow} ${file.path} chunk ${chunkIdx}/${totalChunks}`);
+            this.setStatus('syncing', `${fileNum} ${chunkBar} ${this.formatBytes(bytesTransferred)}/${this.formatBytes(totalBytesAll)} ${sp} | ↑ ${file.path} chunk ${chunkIdx}/${totalChunks}`);
           });
           meta = result.meta;
 
