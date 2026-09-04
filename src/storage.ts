@@ -27,7 +27,7 @@ export class LocalState {
   }
 
   private get statePath(): string {
-    return '.obsidian/plugins/obsidian-pqc-webdav/state.json';
+    return '.obsidian/plugins/post-quantum-webdav/state.json';
   }
 
   async load(): Promise<PersistedState | null> {
