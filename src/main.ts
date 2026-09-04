@@ -344,17 +344,29 @@ export default class PqcWebdavPlugin extends Plugin {
 
       if (mode === 'local') {
         new Notice('Force sync: local wins — uploading all files to remote...');
-        const allFiles = this.app.vault.getFiles();
+        const allFiles = this.app.vault.getFiles().filter(f => !this.shouldSkip(f));
         let uploaded = 0;
-        for (const file of allFiles) {
-          if (this.shouldSkip(file)) continue;
+        let totalBytes = 0;
+        const tStart = performance.now();
+        console.log(`[PQC Force Sync] Local wins: ${allFiles.length} files`);
+
+        for (let i = 0; i < allFiles.length; i++) {
+          const file = allFiles[i];
+          const label = `[${i + 1}/${allFiles.length}] ${file.path}`;
+          this.setStatus('syncing', `↑ ${label}`);
+          const t0 = performance.now();
           const encPath = await encryptFilename(this.masterSecret, state.vaultId, file.path);
           const localData = await this.getFileData(file);
           const result = await this.syncEngine.forceUploadFile(encPath, localData, meta);
           meta = result.meta;
           uploaded++;
+          totalBytes += localData.length;
+          const dur = (performance.now() - t0).toFixed(0);
+          const speed = localData.length > 0 ? ((localData.length / 1024) / ((performance.now() - t0) / 1000)).toFixed(0) : '0';
+          console.log(`  ↑ ${label}  ${(localData.length / 1024).toFixed(1)}KB  ${result.chunks} chunks  ${dur}ms  ${speed}KB/s`);
         }
 
+        this.setStatus('syncing', 'Cleaning remote-only files...');
         const remoteMeta = await this.syncEngine.downloadMetadata();
         for (const encPath of Object.keys(remoteMeta.files)) {
           if (!meta.files[encPath]) {
@@ -364,12 +376,17 @@ export default class PqcWebdavPlugin extends Plugin {
 
         await this.syncEngine.uploadMetadata(meta);
         await this.state.saveMetadata(meta);
+        const elapsed = ((performance.now() - tStart) / 1000).toFixed(1);
+        const avgSpeed = totalBytes > 0 ? (totalBytes / 1024 / ((performance.now() - tStart) / 1000)).toFixed(0) : '0';
         this.setStatus('ready');
-        new Notice(`Force sync (local wins): ${uploaded} files uploaded`);
+        console.log(`[PQC Force Sync] Done: ${uploaded}↑  ${(totalBytes / 1024).toFixed(1)}KB total  ${elapsed}s  avg ${avgSpeed}KB/s`);
+        new Notice(`Force sync (local wins): ${uploaded} files ↑  ${elapsed}s`);
 
       } else {
         new Notice('Force sync: remote wins — downloading all files from remote...');
         const remoteMeta = await this.syncEngine.downloadMetadata();
+        const remoteFiles = Object.entries(remoteMeta.files);
+        console.log(`[PQC Force Sync] Remote wins: ${remoteFiles.length} files`);
 
         const localToEnc = new Map<string, string>();
         for (const file of this.app.vault.getFiles()) {
@@ -385,18 +402,26 @@ export default class PqcWebdavPlugin extends Plugin {
         }
 
         let downloaded = 0;
-        for (const [encPath, remoteEntry] of Object.entries(remoteMeta.files)) {
+        let totalBytes = 0;
+        const tStart = performance.now();
+        for (let i = 0; i < remoteFiles.length; i++) {
+          const [encPath, remoteEntry] = remoteFiles[i];
+          const label = `[${i + 1}/${remoteFiles.length}] ${encPath}`;
+          this.setStatus('syncing', `↓ ${label}`);
+          const t0 = performance.now();
           const data = await this.syncEngine.forceDownloadFile(encPath, remoteMeta);
           if (data) {
-            const text = new TextDecoder().decode(data);
             const localFile = encToLocal.get(encPath);
             if (localFile) {
-              const current = await this.app.vault.read(localFile);
-              if (current !== text) await this.app.vault.modify(localFile, text);
+              await this.writeFile(localFile, data);
             } else {
-              await this.app.vault.create(encPath.replace(/\//g, '--') + '.md', text);
+              await this.app.vault.create(encPath.replace(/\//g, '--') + '.bin', new TextDecoder().decode(data));
             }
             downloaded++;
+            totalBytes += data.length;
+            const dur = (performance.now() - t0).toFixed(0);
+            const speed = data.length > 0 ? ((data.length / 1024) / ((performance.now() - t0) / 1000)).toFixed(0) : '0';
+            console.log(`  ↓ ${label}  ${(data.length / 1024).toFixed(1)}KB  ${remoteEntry.chunks.length} chunks  ${dur}ms  ${speed}KB/s`);
           }
         }
 

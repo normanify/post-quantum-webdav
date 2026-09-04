@@ -525,7 +525,7 @@ export class SyncEngine {
     encPath: string,
     fileData: Uint8Array,
     meta: VaultMetadata
-  ): Promise<{ meta: VaultMetadata }> {
+  ): Promise<{ meta: VaultMetadata; chunks: number }> {
     delete meta.deleted[encPath];
 
     const chunks = await this.chunkManager.split(fileData);
@@ -549,7 +549,7 @@ export class SyncEngine {
       signature: '',
     };
     meta.vectorClock = incrementClock(meta.vectorClock, this.deviceId);
-    return { meta };
+    return { meta, chunks: chunkHashes.length };
   }
 
   async forceDownloadFile(encPath: string, meta: VaultMetadata): Promise<Uint8Array | null> {
