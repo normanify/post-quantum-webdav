@@ -1,6 +1,6 @@
 {
   "name": "post-quantum-webdav",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "Encrypt vault with post-quantum cryptography and sync to WebDAV",
   "main": "main.js",
   "scripts": {
