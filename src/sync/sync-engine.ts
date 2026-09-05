@@ -311,7 +311,7 @@ export class SyncEngine {
     conflicts: SyncConflict[]
   ): VaultMetadata {
     // Start with a deep copy of local metadata
-    const merged: VaultMetadata = JSON.parse(JSON.stringify(localMeta));
+    const merged: VaultMetadata = JSON.parse(JSON.stringify(localMeta)) as unknown as VaultMetadata;
 
     // Merge vector clocks
     merged.vectorClock = mergeClocks(localMeta.vectorClock, remoteMeta.vectorClock);
@@ -320,7 +320,7 @@ export class SyncEngine {
       switch (conflict.type) {
         case 'rollback':
           // Accept remote metadata entirely
-          return JSON.parse(JSON.stringify(remoteMeta));
+          return JSON.parse(JSON.stringify(remoteMeta)) as unknown as VaultMetadata;
 
         case 'modify-modify': {
           if (!conflict.localEntry || !conflict.remoteEntry) break;
@@ -508,7 +508,8 @@ export class SyncEngine {
     for (const [encPath, del] of Object.entries(meta.deleted)) {
       if (new Date(del.deletedAt).getTime() < threshold) {
         for (const hash of del.chunks) {
-          try { await this.webdav.delete(`chunks/${hash}.bin.enc`); } catch {}
+          try { await this.webdav.delete(`chunks/${hash}.bin.enc`); }
+          catch (e) { console.warn(`[PQC GC] failed to delete stale chunk ${hash}: ${e instanceof Error ? e.message : String(e)}`); }
           removed++;
         }
         delete meta.deleted[encPath];

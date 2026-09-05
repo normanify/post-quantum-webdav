@@ -53,7 +53,7 @@ export class WebDavClient {
     method: string,
     relPath: string,
     opts: { body?: string | ArrayBuffer; depth?: string; contentType?: string; allowFail?: boolean } = {}
-  ): Promise<{ status: number; headers: Record<string, string>; arrayBuffer: ArrayBuffer; json: any; text: string } | undefined> {
+  ): Promise<{ status: number; headers: Record<string, string>; arrayBuffer: ArrayBuffer; json: unknown; text: string } | undefined> {
     const headers: Record<string, string> = {
       Authorization: this.auth,
     };
@@ -68,7 +68,7 @@ export class WebDavClient {
         throw: false,
       });
       const timeout$ = new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error(`Request timeout after ${this.timeoutMs}ms: ${method} ${relPath}`)), this.timeoutMs)
+        window.setTimeout(() => reject(new Error(`Request timeout after ${this.timeoutMs}ms: ${method} ${relPath}`)), this.timeoutMs)
       );
       const res = await Promise.race([req$, timeout$]);
       if (res.status >= 400 && !opts.allowFail) return res;

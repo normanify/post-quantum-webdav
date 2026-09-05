@@ -24,7 +24,7 @@ export default class PqcWebdavPlugin extends Plugin {
     this.state = new LocalState(adapter, this.app.vault.configDir);
 
     // Register settings tab
-    this.addSettingTab(new PqcSettingTab(this.app, this, () => this.reconfigure()));
+    this.addSettingTab(new PqcSettingTab(this.app, this, () => { void this.reconfigure(); }));
 
     // Ribbon icon for manual sync
     this.addRibbonIcon('refresh-cw', 'PQC WebDAV Sync', () => {
@@ -110,7 +110,7 @@ export default class PqcWebdavPlugin extends Plugin {
   }
 
   private async loadSettings() {
-    this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+    this.settings = Object.assign({}, DEFAULT_SETTINGS, (await this.loadData()) as unknown as Partial<PqcSettings> | null);
   }
 
   // --- Orchestration ---
@@ -232,7 +232,7 @@ export default class PqcWebdavPlugin extends Plugin {
 
   private async writeFile(file: TFile, data: Uint8Array): Promise<void> {
     const adapter = this.app.vault.adapter;
-    const buffer = new Uint8Array(data).buffer as ArrayBuffer;
+    const buffer = new Uint8Array(data).buffer;
     await adapter.writeBinary(file.path, buffer);
   }
 
@@ -452,7 +452,8 @@ export default class PqcWebdavPlugin extends Plugin {
         let deleted = 0;
         for (const encPath of Object.keys(remoteMeta.files)) {
           if (!meta.files[encPath]) {
-            try { await this.syncEngine.deleteFile(encPath, meta); deleted++; } catch {}
+            try { await this.syncEngine.deleteFile(encPath, meta); deleted++; }
+            catch (e) { errors++; console.error(`  ✕ delete ${encPath}  ERROR:`, e); }
           }
         }
 
@@ -541,7 +542,7 @@ export default class PqcWebdavPlugin extends Plugin {
         for (const [path, encPath] of localToEnc) {
           if (!remoteMeta.files[encPath]) {
             const file = this.app.vault.getAbstractFileByPath(path);
-            if (file instanceof TFile) { await this.app.fileManager.trashFile(file); deleted++; }
+            if (file instanceof TFile) { await this.app.vault.trash(file, false); deleted++; }
           }
         }
 

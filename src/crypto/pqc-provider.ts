@@ -31,6 +31,27 @@ export interface PqcKeyEncapsulation {
 }
 
 /**
+ * The `@noble/post-quantum` public exports are typed with conditional
+ * `TArg`/`TRet` helpers that resolve to `any` under typescript-eslint type-aware
+ * linting. Re-declaring the narrow surface we actually use keeps the provider
+ * fully typed (and lint-clean) without masking real safety issues.
+ */
+interface MldsaApi {
+  keygen(seed?: Uint8Array): { publicKey: Uint8Array; secretKey: Uint8Array };
+  sign(message: Uint8Array, secretKey: Uint8Array): Uint8Array;
+  verify(signature: Uint8Array, message: Uint8Array, publicKey: Uint8Array): boolean;
+}
+
+interface MlkemApi {
+  keygen(seed?: Uint8Array): { publicKey: Uint8Array; secretKey: Uint8Array };
+  encapsulate(recipientPublicKey: Uint8Array): { cipherText: Uint8Array; sharedSecret: Uint8Array };
+  decapsulate(ciphertext: Uint8Array, secretKey: Uint8Array): Uint8Array;
+}
+
+const mldsa = ml_dsa65 as unknown as MldsaApi;
+const mlkem = ml_kem768 as unknown as MlkemApi;
+
+/**
  * ML-DSA (Dilithium) operations for integrity verification.
  * ML-DSA-65: ~3309B signature, ~4032B private key, ~1952B public key
  */
@@ -39,7 +60,7 @@ export const pqcDsa = {
    * Generate an ML-DSA-65 key pair for signing.
    */
   generateKeyPair(): PqcKeyPair {
-    const keyPair = ml_dsa65.keygen();
+    const keyPair = mldsa.keygen();
     return {
       publicKey: new Uint8Array(keyPair.publicKey),
       secretKey: new Uint8Array(keyPair.secretKey),
@@ -53,7 +74,7 @@ export const pqcDsa = {
    * @returns signature (~3309 bytes)
    */
   sign(secretKey: Uint8Array, message: Uint8Array): Uint8Array {
-    const signature = ml_dsa65.sign(message, secretKey);
+    const signature = mldsa.sign(message, secretKey);
     return new Uint8Array(signature);
   },
 
@@ -65,7 +86,7 @@ export const pqcDsa = {
    * @returns true if valid
    */
   verify(publicKey: Uint8Array, message: Uint8Array, signature: Uint8Array): boolean {
-    return ml_dsa65.verify(signature, message, publicKey);
+    return mldsa.verify(signature, message, publicKey);
   },
 };
 
@@ -78,7 +99,7 @@ export const pqcKem = {
    * Generate an ML-KEM-768 key pair for encapsulation.
    */
   generateKeyPair(): PqcKeyPair {
-    const keyPair = ml_kem768.keygen();
+    const keyPair = mlkem.keygen();
     return {
       publicKey: new Uint8Array(keyPair.publicKey),
       secretKey: new Uint8Array(keyPair.secretKey),
@@ -91,7 +112,7 @@ export const pqcKem = {
    * @returns { ciphertext, sharedSecret } - ciphertext (~1184B) and shared secret (~32B)
    */
   encapsulate(recipientPublicKey: Uint8Array): PqcKeyEncapsulation {
-    const result = ml_kem768.encapsulate(recipientPublicKey);
+    const result = mlkem.encapsulate(recipientPublicKey);
     return {
       ciphertext: new Uint8Array(result.cipherText),
       sharedSecret: new Uint8Array(result.sharedSecret),
@@ -105,7 +126,7 @@ export const pqcKem = {
    * @returns shared secret (~32 bytes)
    */
   decapsulate(secretKey: Uint8Array, ciphertext: Uint8Array): Uint8Array {
-    const sharedSecret = ml_kem768.decapsulate(ciphertext, secretKey);
+    const sharedSecret = mlkem.decapsulate(ciphertext, secretKey);
     return new Uint8Array(sharedSecret);
   },
 };

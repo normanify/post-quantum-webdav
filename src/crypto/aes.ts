@@ -88,7 +88,7 @@ export async function decrypt(
   const plain = await crypto.subtle.decrypt(
     { name: 'AES-GCM', iv: iv as unknown as BufferSource },
     key,
-    cipher as unknown as BufferSource
+    cipher
   );
   return new Uint8Array(plain);
 }
