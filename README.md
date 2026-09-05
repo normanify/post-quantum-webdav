@@ -17,7 +17,7 @@ All file names and contents are encrypted before they leave your device. The rem
 
 ## Installation
 
-> This plugin is not yet listed in the Obsidian Community directory. Install it manually (below) or via [BRAT](https://github.com/TfTHacker/obsidian42-brat).
+> This plugin is listed in the Obsidian Community directory. Install it from *Settings → Community plugins* or manually (below).
 
 ### Manual install (BRAT / development)
 
