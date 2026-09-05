@@ -273,10 +273,16 @@ export default class PqcWebdavPlugin extends Plugin {
 
       const allFiles = this.app.vault.getFiles();
       const filesToSync = allFiles.filter(f => !this.shouldSkip(f));
+      const localEncPaths = new Set<string>();
+      for (const f of allFiles) {
+        localEncPaths.add(await encryptFilename(this.masterSecret, state.vaultId, f.path));
+      }
+      const prevLocalEntries = Object.keys(state.metadata.files);
       let uploaded = 0;
       let downloaded = 0;
       let conflicts = 0;
       let skipped = 0;
+      let deleted = 0;
       let errors = 0;
       let bytesTransferred = 0;
       const totalBytesAll = filesToSync.reduce((sum, f) => sum + f.stat.size, 0);
@@ -345,11 +351,36 @@ export default class PqcWebdavPlugin extends Plugin {
             case 'unchanged':
               skipped++;
               break;
+            case 'deleted':
+              deleted++;
+              console.log(`  🗑 [${fileNum}] ${file.path}  removed locally (deleted on remote)`);
+              await this.app.vault.trash(file, false);
+              break;
           }
         } catch (e) {
           errors++;
           console.error(`  ✕ [${fileNum}] ${file.path}  ERROR:`, e);
         }
+      }
+
+      // Propagate local deletions: tombstone only files this device previously
+      // tracked — remote-only files on a fresh device must never be wiped.
+      let propagated = 0;
+      for (const encPath of prevLocalEntries) {
+        if (!localEncPaths.has(encPath)) {
+          try {
+            const res = await this.syncEngine.deleteFile(encPath, meta);
+            meta = res.meta;
+            propagated++;
+            console.log(`  🗑 ${encPath}  removed from remote (deleted locally)`);
+          } catch (e) {
+            errors++;
+            console.error(`  ✕ delete ${encPath}  ERROR:`, e);
+          }
+        }
+      }
+      if (propagated > 0) {
+        await this.syncEngine.uploadMetadata(meta);
       }
 
       await this.state.saveMetadata(meta);
@@ -369,9 +400,9 @@ export default class PqcWebdavPlugin extends Plugin {
         : '';
       this.setStatus('ready');
       console.log(`[PQC Sync] ───────────────────────────────────────`);
-      console.log(`[PQC Sync] Done: ${uploaded}↑ ${downloaded}↓ ${skipped}○ ${conflicts}⚠ ${errors}✕  ${this.formatBytes(bytesTransferred)} in ${elapsed}s  ${avgSpeed}`);
-      if (uploaded + downloaded + conflicts + errors > 0) {
-        new Notice(`PQC Sync: ${uploaded}↑ ${downloaded}↓ ${conflicts}⚠  ${elapsed}s`);
+      console.log(`[PQC Sync] Done: ${uploaded}↑ ${downloaded}↓ ${skipped}○ ${deleted}🗑 ${conflicts}⚠ ${errors}✕  ${this.formatBytes(bytesTransferred)} in ${elapsed}s  ${avgSpeed}`);
+      if (uploaded + downloaded + deleted + conflicts + errors > 0) {
+        new Notice(`PQC Sync: ${uploaded}↑ ${downloaded}↓ ${deleted}🗑 ${conflicts}⚠  ${elapsed}s`);
       }
     } catch (e) {
       console.error('PQC sync failed:', e);

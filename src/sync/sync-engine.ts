@@ -349,6 +349,7 @@ export class SyncEngine {
             if (remoteTime > localTime) {
               // Remote deletion wins
               delete merged.files[conflict.path];
+              merged.deleted[conflict.path] = conflict.remoteEntry as DeletedEntry;
             }
             // If local is newer, keep local file
           }
@@ -427,6 +428,7 @@ export class SyncEngine {
       deviceId: this.deviceId,
       signature: '',
     };
+    delete meta.deleted[encPath];
 
     meta.vectorClock = incrementClock(meta.vectorClock, this.deviceId);
 
@@ -573,7 +575,7 @@ export class SyncEngine {
     onProgress?: ProgressCallback
   ): Promise<{
     meta: VaultMetadata;
-    action: 'uploaded' | 'downloaded' | 'conflict-resolved' | 'unchanged';
+    action: 'uploaded' | 'downloaded' | 'conflict-resolved' | 'unchanged' | 'deleted';
     conflicts?: SyncConflict[];
     downloadedData?: Uint8Array;
     chunks?: number;
@@ -587,6 +589,10 @@ export class SyncEngine {
     if (conflicts.length > 0) {
       const mergedMeta = this.resolveConflicts(localMeta, remoteMeta, conflicts);
 
+      if (mergedMeta.deleted[encPath]) {
+        await this.uploadMetadata(mergedMeta);
+        return { meta: mergedMeta, action: 'deleted', conflicts };
+      }
       if (mergedMeta.files[encPath]) {
         const { meta: uploadedMeta, chunks, durationMs, bytes } = await this.uploadFile(encPath, localData, mergedMeta, onProgress);
         await this.uploadMetadata(uploadedMeta);
@@ -601,7 +607,32 @@ export class SyncEngine {
     const remoteEntry = remoteMeta.files[encPath];
     const localEntry = localMeta.files[encPath];
 
+    // Content-identical fast path: chunk hashes are a pure content fingerprint,
+    // so equality with the remote entry means nothing needs transferring —
+    // regardless of timestamps/deviceId (prevents the tiebreak re-transfer churn).
+    if (remoteEntry && localEntry) {
+      const localChunks = await this.chunkManager.split(localData);
+      const sameContent =
+        localChunks.length === remoteEntry.chunks.length &&
+        localChunks.every((c, i) => c.info.hash === remoteEntry.chunks[i]);
+      if (sameContent) {
+        return { meta: localMeta, action: 'unchanged' };
+      }
+    }
+
     if (!remoteEntry && !localEntry) {
+      const remoteTombstone = remoteMeta.deleted[encPath];
+      if (remoteTombstone && remoteTombstone.chunks.length > 0) {
+        // Same bytes as the tombstoned version → no new local content, so the
+        // remote deletion stands. Different bytes → local recreated the file.
+        const localChunks = await this.chunkManager.split(localData);
+        const sameAsTombstone =
+          localChunks.length === remoteTombstone.chunks.length &&
+          localChunks.every((c, i) => c.info.hash === remoteTombstone.chunks[i]);
+        if (sameAsTombstone) {
+          return { meta: localMeta, action: 'deleted' };
+        }
+      }
       // First sync: file exists locally but neither metadata tracks it yet — upload it
       const { meta: uploadedMeta, chunks, durationMs, bytes } = await this.uploadFile(encPath, localData, remoteMeta, onProgress);
       await this.uploadMetadata(uploadedMeta);
@@ -609,6 +640,21 @@ export class SyncEngine {
     }
 
     if (!remoteEntry && localEntry) {
+      const remoteTombstone = remoteMeta.deleted[encPath];
+      if (remoteTombstone && remoteTombstone.chunks.length > 0) {
+        // Local content identical to what we last synced → the remote deletion
+        // is authoritative; follow it instead of re-uploading. Different
+        // content → local edit wins, upload it.
+        const localChunks = await this.chunkManager.split(localData);
+        const sameAsLocalEntry =
+          localChunks.length === localEntry.chunks.length &&
+          localChunks.every((c, i) => c.info.hash === localEntry.chunks[i]);
+        if (sameAsLocalEntry) {
+          const { meta: deletedMeta } = await this.deleteFile(encPath, localMeta);
+          await this.uploadMetadata(deletedMeta);
+          return { meta: deletedMeta, action: 'deleted' };
+        }
+      }
       const { meta: uploadedMeta, chunks, durationMs, bytes } = await this.uploadFile(encPath, localData, remoteMeta, onProgress);
       await this.uploadMetadata(uploadedMeta);
       return { meta: uploadedMeta, action: 'uploaded', chunks, durationMs, bytes };
