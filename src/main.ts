@@ -307,6 +307,19 @@ export default class PqcWebdavPlugin extends Plugin {
           const encPath = await encryptFilename(this.masterSecret, state.vaultId, file.path);
           const localData = await this.getFileData(file);
 
+          // Refresh the local entry's ownership from the vault file before
+          // syncing: the current mtime and this device own the latest state.
+          // Without this, a same-device re-edit keeps the previous upload's
+          // timestamp, so the sync downloads (and overwrites) the newer local
+          // edit; a cross-device edit stays attributed to the wrong device
+          // and slips past conflict detection. Chunk-identity checks in the
+          // engine keep unchanged files from churning re-uploads.
+          const localEntry = meta.files[encPath];
+          if (localEntry) {
+            localEntry.modifiedAt = new Date(file.stat.mtime).toISOString();
+            localEntry.deviceId = this.persisted.device.deviceId;
+          }
+
           const result = await this.syncEngine.syncFile(encPath, localData, meta, (chunkIdx, totalChunks, chunkBytes, totalBytes, direction) => {
             const chunkPct = totalBytesAll > 0 ? (bytesTransferred + (localData.length * chunkIdx / totalChunks)) / totalBytesAll : 0;
             const chunkBar = this.progressBar(chunkPct);

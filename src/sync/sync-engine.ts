@@ -172,13 +172,21 @@ export class SyncEngine {
   // --- Remote I/O ---
 
   async downloadMetadata(): Promise<VaultMetadata> {
+    let raw: Uint8Array;
     try {
-      const raw = await this.webdav.downloadBytes('metadata.json');
-      const text = new TextDecoder().decode(raw);
-      return JSON.parse(text) as VaultMetadata;
-    } catch {
-      return createEmptyMetadata(this.vaultId, this.chunkManager['chunkSize']);
+      raw = await this.webdav.downloadBytes('metadata.json');
+    } catch (e) {
+      // Only a 404 means the server has no metadata yet (fresh vault) — treat
+      // that as empty. Any other failure (network/timeout/5xx) must abort:
+      // fabricating an empty metadata would let a later upload overwrite the
+      // real remote metadata and destroy every device's view of the vault.
+      if (e instanceof Error && /404|not found/i.test(e.message)) {
+        return createEmptyMetadata(this.vaultId, this.chunkManager['chunkSize']);
+      }
+      throw e;
     }
+    const text = new TextDecoder().decode(raw);
+    return JSON.parse(text) as VaultMetadata;
   }
 
   async uploadMetadata(meta: VaultMetadata): Promise<void> {
@@ -218,9 +226,24 @@ export class SyncEngine {
         continue;
       }
 
-      // Both have the file — check if same version
-      if (localEntry.modifiedAt === remoteEntry.modifiedAt && localEntry.deviceId === remoteEntry.deviceId) {
-        continue; // Same version, no conflict
+      // Both have the file — check if same version.
+      // Chunk hashes are a pure content fingerprint: identical chunks ⇒
+      // identical content ⇒ same version, regardless of timestamps or
+      // deviceId. The main plugin refreshes the local entry's modifiedAt
+      // from the file mtime on every sync, so a bare timestamp comparison
+      // would fabricate a conflict (and a re-upload) for files that never
+      // changed — the churn this check prevents.
+      if (
+        localEntry.chunks.length === remoteEntry.chunks.length &&
+        localEntry.chunks.every((h, i) => h === remoteEntry.chunks[i])
+      ) {
+        continue; // Same content, no conflict
+      }
+      // The same device previously wrote both entries: the local file is
+      // authoritative, the plain timestamp compare in syncFile decides —
+      // this is never a cross-device conflict.
+      if (localEntry.deviceId === remoteEntry.deviceId) {
+        continue;
       }
 
       // Both modified — check vector clocks
@@ -361,6 +384,9 @@ export class SyncEngine {
           // If concurrent: remote's modification wins (user explicitly modified)
           if (conflict.localEntry && conflict.remoteEntry) {
             const remoteEntry = conflict.remoteEntry as FileEntry;
+            // Clear the loser's tombstone so syncFile's deleted-branch doesn't
+            // misclassify this path as a deletion when the remote file won.
+            delete merged.deleted[conflict.path];
             merged.files[conflict.path] = remoteEntry;
           }
           break;
@@ -381,9 +407,12 @@ export class SyncEngine {
       }
     }
 
-    // Apply remote deletions that local doesn't have
+    // Apply remote deletions that local doesn't have — excluding paths already
+    // settled by a delete-modify conflict (e.g. local-wins), whose own remote
+    // tombstone must not propagate back in and undo the LWW winner.
+    const resolvedPaths = new Set(conflicts.map(c => c.path));
     for (const [encPath, remoteDeleted] of Object.entries(remoteMeta.deleted)) {
-      if (!merged.deleted[encPath]) {
+      if (!merged.deleted[encPath] && !resolvedPaths.has(encPath)) {
         merged.deleted[encPath] = remoteDeleted;
         delete merged.files[encPath];
       }
@@ -586,6 +615,12 @@ export class SyncEngine {
 
     const conflicts = this.detectConflicts(localMeta, remoteMeta);
 
+    if (conflicts.some(c => c.type === 'rollback')) {
+      // The remote metadata is older than local: accepting it would wipe newer
+      // local state. Abort — the user must explicitly force a full sync.
+      throw new Error('Vault metadata rollback detected (remote is behind local). Refusing to sync; use Force Full Sync to recover.');
+    }
+
     if (conflicts.length > 0) {
       const mergedMeta = this.resolveConflicts(localMeta, remoteMeta, conflicts);
 
@@ -594,6 +629,24 @@ export class SyncEngine {
         return { meta: mergedMeta, action: 'deleted', conflicts };
       }
       if (mergedMeta.files[encPath]) {
+        // LWW may have picked either side: only upload local content when the
+        // local entry actually won. If the remote entry won, download instead
+        // of clobbering the newer remote content with stale local bytes.
+        const remoteEntry = remoteMeta.files[encPath];
+        // resolveConflicts deep-copies the LOCAL metadata and only ever
+        // assigns the remote entry by reference when the remote side wins,
+        // so reference equality is the precise "remote won" test. Comparing
+        // fields instead (deviceId/modifiedAt) misfires when the local side
+        // wins a timestamp tiebreaker carrying a coincidentally identical
+        // entry — that would wrongly download stale remote content over it.
+        const remoteWon = remoteEntry !== undefined && mergedMeta.files[encPath] === remoteEntry;
+
+        if (remoteWon) {
+          await this.uploadMetadata(mergedMeta);
+          const result = await this.downloadFile(encPath, mergedMeta, onProgress);
+          return { meta: mergedMeta, action: 'conflict-resolved', conflicts, downloadedData: result?.data, chunks: result?.chunks, durationMs: result?.durationMs, bytes: result?.bytes };
+        }
+
         const { meta: uploadedMeta, chunks, durationMs, bytes } = await this.uploadFile(encPath, localData, mergedMeta, onProgress);
         await this.uploadMetadata(uploadedMeta);
         return { meta: uploadedMeta, action: 'conflict-resolved', conflicts, chunks, durationMs, bytes };
@@ -673,7 +726,10 @@ export class SyncEngine {
       await this.uploadMetadata(uploadedMeta);
       return { meta: uploadedMeta, action: 'uploaded', chunks, durationMs, bytes };
     } else {
-      if (this.deviceId > localEntry.deviceId) {
+      // Equal timestamps: the local file's mtime landed exactly on the last
+      // upload time. On the SAME device that means the local file is the
+      // newer edit — never overwrite it with a download.
+      if (this.deviceId >= localEntry.deviceId) {
         const { meta: uploadedMeta, chunks, durationMs, bytes } = await this.uploadFile(encPath, localData, remoteMeta, onProgress);
         await this.uploadMetadata(uploadedMeta);
         return { meta: uploadedMeta, action: 'uploaded', chunks, durationMs, bytes };
